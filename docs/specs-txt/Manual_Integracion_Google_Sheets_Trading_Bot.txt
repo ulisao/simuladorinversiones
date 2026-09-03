@@ -1,0 +1,154 @@
+
+INTEGRACIÓN TOTAL CON GOOGLE SHEETS: AUDITORÍA DE RENDIMIENTO NETO Y CONTROL EN VIVO
+Configuración Paso a Paso de Google Cloud API, Código Python de Registro Automático y Fórmulas Financieras
+1. Estructura Exacta de la Hoja de Google Sheets
+Crear una hoja de cálculo en Google Sheets titulada exactamente 'Trading_Log_IOL'. En la primera fila (encabezados de columnas de A a K), pegar los siguientes nombres:
+| Columna
+| Nombre del Encabezado
+| Descripción y Datos Registrados por el Bot
+| A
+| Fecha_Hora
+| Timestamp exacto de ejecución de la orden (YYYY-MM-DD HH:MM).
+| B
+| Ticker
+| Activo operado (ej. AL30, GD30, NVDA, AAPL).
+| C
+| Tipo_Operacion
+| Etiqueta: COMPRA o VENTA.
+| D
+| Plazo
+| Plazo de liquidación: Contado Inmediato (CI / t0).
+| E
+| Cantidad
+| Número entero de nominales o papeles adquiridos/vendidos.
+| F
+| Precio_Entrada
+| Precio por unidad al momento de compra.
+| G
+| Precio_Salida
+| Precio por unidad al momento de venta (vacío mientras esté abierta).
+| H
+| Comisiones_IOL
+| Descuento total de comisiones (0.6% entrada + 0.6% salida con IVA).
+| I
+| Resultado_Neto_$
+| Ganancia o pérdida limpia de bolsillo en pesos argentinos ($ ARS).
+| J
+| Rendimiento_%
+| Porcentaje de retorno neto sobre el capital asignado a la posición.
+| K
+| Estado
+| ABIERTA (posición en cartera) o CERRADA (operación concluida).
+
+2. Panel Superior de Métricas en Vivo (Fórmulas para Celular)
+En una segunda pestaña de la misma hoja, llamada 'Dashboard', podés colocar estas fórmulas para abrir el celular durante el trabajo y ver de un vistazo si estás ganando o perdiendo frente a Mercado Pago y la inflación:
+• Ganancia Neta Total de Bolsillo ($ ARS): =SUMA(Trading_Log_IOL!I2:I)
+• Rendimiento Acumulado de la Cartera (%): =(Dashboard!B1 / 100000) * 100
+• Total de Operaciones Concluidas: =CONTAR.SI(Trading_Log_IOL!K2:K; "CERRADA")
+• Tasa de Acierto Real (% Win Rate): =(CONTAR.SI.CONJUNTO(Trading_Log_IOL!K2:K; "CERRADA"; Trading_Log_IOL!I2:I; ">0") / Dashboard!B3) * 100
+• Estado vs. Benchmark Mensual: =SI(Dashboard!B2 > 2.5; "SUPERANDO INFLACIÓN Y MERCADO PAGO"; "EN SEGUIMIENTO")
+3. Configuración de Google Cloud Console (Obtención de credenciales.json a Costo $0)
+Para permitir que el servidor en la nube escriba en tu Google Sheets sin pedir contraseñas manualmente, se usa una Cuenta de Servicio:
+1. Ingresar a Google Cloud Console (console.cloud.google.com) con tu cuenta de Gmail.
+2. Crear un proyecto nuevo y llamarlo 'TradingBotLogger'.
+3. En el menú lateral, ir a 'APIs y servicios' > 'Biblioteca'. Buscar 'Google Sheets API' y hacer clic en Habilitar. Buscar también 'Google Drive API' y habilitarla.
+4. Ir a 'Credenciales' > 'Crear credenciales' > 'Cuenta de servicio'. Asignarle el nombre 'sheets-bot' y rol 'Editor'.
+5. Entrar a la cuenta de servicio creada, pestaña 'Claves' (Keys) > 'Agregar clave' > 'Crear clave nueva' > seleccionar JSON.
+6. Se descargará automáticamente un archivo JSON. Cambiarle el nombre a 'credenciales_google.json'.
+7. Abrir el archivo JSON, copiar el correo que figura en el campo 'client_email' (ej. sheets-bot@tradingbotlogger.iam.gserviceaccount.com).
+8. Abrir tu hoja de cálculo en Google Sheets, hacer clic en el botón 'Compartir' (arriba a la derecha), pegar ese correo y darle permisos de EDITOR.
+| SEGURIDAD DE CUENTA: Este paso vincula la seguridad de Google: tu bot solo podrá escribir en la hoja que le compartiste, sin tener acceso al resto de tus archivos de Google Drive.
+
+4. Módulo de Conexión en Python: sheets_logger.py
+Este script se ubica en ~/trading_bot/ y gestiona la apertura, escritura y cálculo de comisiones netas en Google Sheets:
+| import gspread
+from oauth2client.service_account import ServiceAccountCredentials
+from datetime import datetime
+import os
+
+class SheetsAuditLogger:
+    def __init__(self, sheet_name="Trading_Log_IOL"):
+        self.sheet_name = sheet_name
+        self.creds_file = os.path.join(os.path.dirname(__file__), "credenciales_google.json")
+        self.scope = [
+            "https://spreadsheets.google.com/feeds",
+            "https://www.googleapis.com/auth/drive"
+        ]
+        self.conectar()
+
+    def conectar(self):
+        """Autenticación segura con Google Sheets API mediante Service Account."""
+        creds = ServiceAccountCredentials.from_json_keyfile_name(self.creds_file, self.scope)
+        self.client = gspread.authorize(creds)
+        self.sheet = self.client.open(self.sheet_name).sheet1
+
+    def registrar_compra(self, ticker, cantidad, precio_compra):
+        """Registra la orden de compra ejecutada en Contado Inmediato."""
+        fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M")
+        comision_entrada = round((precio_compra * cantidad) * 0.006, 2)  # 0.5% + IVA IOL
+        fila = [
+            fecha_hora,
+            ticker,
+            "COMPRA",
+            "CI (t0)",
+            cantidad,
+            precio_compra,
+            "",                   # Precio de salida vacío
+            comision_entrada,
+            "",                   # Resultado neto pendiente
+            "",                   # Rendimiento % pendiente
+            "ABIERTA"
+        ]
+        self.sheet.append_row(fila)
+        print(f"[SHEETS] Compra de {ticker} registrada en la fila correspondiente.")
+
+    def registrar_venta(self, ticker, cantidad, precio_compra, precio_venta):
+        """Calcula la comisión de salida, resultado neto limpio de bolsillo y cierra posición."""
+        fecha_hora = datetime.now().strftime("%Y-%m-%d %H:%M")
+        total_invertido = precio_compra * cantidad
+        total_ingreso = precio_venta * cantidad
+        
+        # Fricción total IOL (Compra 0.6% + Venta 0.6% con IVA incluido)
+        comision_total = round((total_invertido * 0.006) + (total_ingreso * 0.006), 2)
+        resultado_neto_pesos = round((total_ingreso - total_invertido) - comision_total, 2)
+        rendimiento_neto_pct = round((resultado_neto_pesos / total_invertido) * 100, 2)
+
+        fila = [
+            fecha_hora,
+            ticker,
+            "VENTA",
+            "CI (t0)",
+            cantidad,
+            precio_compra,
+            precio_venta,
+            comision_total,
+            resultado_neto_pesos,
+            f"{rendimiento_neto_pct}%",
+            "CERRADA"
+        ]
+        self.sheet.append_row(fila)
+        print(f"[SHEETS] Venta de {ticker} auditada con éxito. Ganancia neta: ${resultado_neto_pesos} ({rendimiento_neto_pct}%).")
+
+5. Integración del Logger con el Bot Principal (bot_master.py / bot_bonds.py)
+Para que cada compra o venta se sincronice automáticamente sin intervención humana, se importa el módulo en el bot:
+| # En bot_master.py o bot_bonds.py agregar al principio:
+from sheets_logger import SheetsAuditLogger
+
+logger = SheetsAuditLogger()
+
+# Dentro del ciclo de ejecución, tras confirmar la orden en IOL:
+ok, resp = iol.comprar_bono_ci(bono, cantidad, precio)
+if ok:
+    # 1. Enviar alerta a Telegram
+    send_telegram(f"🚀 Compra ejecutada de {bono} a ${precio}")
+    # 2. Registrar instantáneamente en Google Sheets
+    logger.registrar_compra(bono, cantidad, precio)
+
+# Cuando salte el Stop-Loss o Take-Profit:
+ok_venta, resp_v = iol.vender_bono_ci(bono, cantidad, precio_venta)
+if ok_venta:
+    logger.registrar_venta(bono, cantidad, precio_entrada, precio_venta)
+    send_telegram(f"🏁 Posición cerrada en {bono}. Datos auditados en Google Sheets.")
+
+| CONTROL FINANCIERO TOTAL: Con esta arquitectura, cada peso operado queda reflejado en tu Google Sheets en tiempo real. Podés auditar las comisiones exactas de InvertirOnline y comparar tu rentabilidad mensual frente a la tasa de Mercado Pago y la inflación desde tu celular.
+

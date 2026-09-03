@@ -1,0 +1,98 @@
+
+GUÍA DEFINITIVA: SISTEMAS DE INVERSIÓN CON IA
+Fuentes Oficiales Verificadas, Arquitectura Gratuita vs. Paga, Filtro de Noticias y Gestión de Riesgo
+――――――――――――――――――――――――――――――――――――――――――――――――――
+1. Directorio de Fuentes de Datos Oficiales, Confiables y Seguras
+Para que la IA opere con datos auditables y nunca extraiga información falsa o manipulada de 'cualquier lado', estas son las plataformas oficiales e institucionales exactas que se deben conectar al sistema:
+| Tipo de Dato
+| Entidad / Plataforma Oficial
+| Nivel de Confiabilidad
+| Acceso / Protocolo
+| Balances Oficiales
+| SEC EDGAR(sec.gov/edgar)
+| Máxima (Regulador Oficial EE. UU.)
+| API Pública Gratuita (10-Q trimestrales y 10-K anuales auditados).
+| Datos Macroeconómicos
+| FRED St. Louis Fed(fred.stlouisfed.org)
+| Máxima (Banco de la Reserva Federal)
+| API fredapi 100% gratuita (Tasas FED, Inflación CPI, Curva 10Y-2Y).
+| Precios y Volúmenes
+| Yahoo Finance / yfinance(finance.yahoo.com)
+| Alta (Consolida feeds de NASDAQ, NYSE y BYMA)
+| Librería Python yfinance (Precios históricos, splits y dividendos).
+| Mercado Argentino
+| BYMA / BCRA Oficial(byma.com.ar / bcra.gob.ar)
+| Máxima (Mercado y Banco Central de Argentina)
+| APIs de brokers regulados por CNV (IOL, Balanz, Cocos) y BCRA API.
+| Noticias Globales
+| Reuters Financial & Yahoo Finance RSS
+| Alta (Agencia de noticias institucional global)
+| Feeds RSS oficiales limpios leídos con feedparser en Python.
+| Índice de Volatilidad
+| CBOE VIX(cboe.com)
+| Máxima (Chicago Board Options Exchange)
+| Símbolo ^VIX en yfinance para detectar pánico en Wall Street.
+
+2. Procesamiento de Noticias Globales y Filtro de Crisis (Cisnes Negros)
+Para que la IA no compre a ciegas durante crisis geopolíticas o colapsos de mercado, se implementa una doble capa de seguridad:
+A. El Modelo de Sentimiento Financiero (FinBERT)
+FinBERT es un modelo de Deep Learning entrenado exclusivamente con textos financieros institucionales. Corre 100% local en tu PC:
+Puntaje Cuantitativo: Evalúa cada titular en una escala de -1.0 (Pánico extremo) a +1.0 (Euforia / Muy alcista).
+Filtro por Empresa: Si el puntaje promedio de noticias de un CEDEAR es menor a -0.35 en las últimas 24 horas, la orden técnica queda bloqueada.
+B. El 'Interruptor de Emergencia' Global (Circuit Breaker)
+Alerta de Volatilidad: Si el índice VIX de Wall Street supera los 25 puntos o sube más de 10% en el día, el script prohíbe compras en toda la cartera.
+Alertas Geopolíticas: Filtro de palabras de alerta crítica ('war', 'sanctions', 'default', 'sec fraud', 'bank run'). Si aparecen con alta frecuencia, se suspenden compras.
+C. Esquema Lógico del Veto Automático
+| [ Señal Técnica de Compra Generada ]                  │                  ▼   ¿Existen Noticias o Eventos de Alto Riesgo?    ├── ¿VIX > 25 puntos o suba intradiaria > 10%?    ├── ¿Sentiment Score del Activo < -0.35?    └── ¿Alertas geopolíticas / macroactivadas en Reuters?                  │         ┌────────┴────────┐         ▼                 ▼       [ SÍ ]            [ NO ]         │                 │   VETO AUTOMÁTICO    ORDEN AUTORIZADA  "Compra cancelada   "Ejecutar compra   por riesgo global"  con Stop-Loss" 
+
+3. Configuración a Costo Cero ($0 USD / $0 ARS al Mes)
+Arquitectura recomendada para maximizar la rentabilidad neta:
+Entorno: Python 3.10+ en VS Code / Jupyter local o en Google Colab con aceleración GPU T4 gratuita.
+Datos Gratuitos: yfinance (precios), SEC-EDGAR-Downloader (balances), feedparser (noticias Reuters/Yahoo), fredapi (FED).
+Motores de IA: LightGBM / XGBoost para el ranking de activos + FinBERT para análisis de sentimiento local.
+Base de Datos: Base de datos SQLite local o archivos Parquet comprimidos.
+Alertas: Bot de Telegram gratuito que envía la señal final con el motivo y nivel de stop-loss a tu celular.
+4. Configuración con Infraestructura Paga y Precios Detallados
+| Categoría
+| Servicio / Herramienta
+| Costo Mensual Estimado
+| Aporte al Sistema
+| Datos de Mercado
+| Financial Modeling Prep / Polygon
+| USD 19 - 29 / mes(~$25.000 - $38.000 ARS)
+| Balances estructurados en JSON, ratios en tiempo real, histórico limpio.
+| Servidor / Hosting
+| VPS en la nube (DigitalOcean / Hetzner)
+| USD 6 - 12 / mes(~$8.000 - $16.000 ARS)
+| Ejecución continua 24/7 sin depender de la PC personal encendida.
+| Modelos LLM (IA)
+| OpenAI API (GPT-4o-mini) / Anthropic
+| USD 5 - 15 / mes(~$6.500 - $20.000 ARS)
+| Lectura profunda y síntesis cualitativa de transcripciones y balances.
+| Alertas y Plataforma
+| TradingView Pro / Premium
+| USD 15 - 30 / mes(~$20.000 - $40.000 ARS)
+| Backtesting visual rápido, screeners intradía y webhooks directos.
+| TOTAL COMBO PAGO
+| Infraestructura Cuantitativa Completa
+| USD 45 - 85 / mes(~$60.000 - $115.000 ARS)
+| Sistema profesional completo en la nube con lectura masiva de datos.
+
+5. Evaluación Estratégica: ¿Es Buena o Mala Idea?
+A. Por qué es una EXCELENTE IDEA (A Costo Cero)
+Disciplina Emocional: Elimina sesgos psicológicos de euforia (FOMO) y pánico en caídas.
+Eficiencia de Tiempo: Permite evaluar 50 CEDEARs y balances en segundos con código local.
+Cero Arrastre de Costos: Al no pagar costos fijos mensuales, el capital rinde al 100% neto.
+Escalabilidad Total: La misma lógica sirve para carteras pequeñas o capitales grandes.
+B. Las Trampas que la Convierten en una MALA IDEA
+La Trampa del Trading Diario: Las comisiones de broker y el spread en operaciones de 24 hs destruyen el capital. En plazos tan cortos el mercado es puro ruido estadístico.
+Costos Fijos Prematuros: Pagar $80.000 ARS/mes en una cartera chica genera una pérdida asegurada antes de empezar.
+Estrategia Recomendada: El Enfoque Ganador: Swing Trading Semanal (operaciones de 3 a 10 días capturando movimientos de 3% a 8%).
+6. Puntos Críticos para Maximizar Ganancias y Proteger Capital
+| ADVERTENCIA DE RIESGO PROFESIONAL: En los mercados NO existen 'ganancias seguras'. El éxito profesional se basa en la Esperanza Matemática Positiva: tener un sistema que corte rápido las pérdidas y deje correr las ganancias, respaldado por un filtro estricto de noticias y régimen de mercado.
+
+1. Stop-Loss Obligatorio: Toda orden ejecutada debe incluir un límite de pérdida automático (ej. -2.5% a -3.5%).
+2. Control de Posición (Position Sizing): Máximo 15% a 20% del capital total en un solo activo para blindarse ante riesgos corporativos.
+3. Datos Point-in-Time: Al entrenar modelos, usar únicamente datos que eran públicos en la fecha histórica analizada.
+4. Filtro de Liquidez: Operar solo CEDEARs y activos con alto volumen diario para entrar y salir sin pagar sobreprecios.
+5. Refugio en Liquidez Dolarizada: Ante picos del VIX o noticias globales graves, el sistema ordena quedar 100% en liquidez (USD/USDT).

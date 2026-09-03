@@ -1,0 +1,402 @@
+
+MANUAL MAESTRO Y ARQUITECTURA DE CÓDIGO COMPLETA: BOT CUANTITATIVO DE SWING TRADING
+Sistema Autónomo en la Nube con IA, Filtros de Cisnes Negros, Conexión IOL API y Alertas de Telegram
+1. Introducción y Arquitectura del Sistema
+Este documento técnico contiene la especificación completa y el código fuente modular para implementar un sistema de Swing Trading 100% automatizado en la nube (VPS). El sistema audita el mercado de CEDEARs en BYMA, filtra falsas señales mediante siete capas de validación institucional, detecta acumulación de dinero inteligente y ejecuta compras automáticas en Contado Inmediato vía InvertirOnline (IOL) protegiendo el capital con Stop-Loss dinámico.
+| Módulo / Script
+| Función Operativa
+| Dependencias Técnicas
+| config.py
+| Variables de entorno, credenciales API cifradas y parámetros de riesgo.
+| python-dotenv, os
+| macro_news.py
+| Filtro VIX Circuit Breaker + FinBERT Local de sentimiento de noticias.
+| yfinance, feedparser, transformers, torch
+| insider_smartmoney.py
+| Scanner de Compras de Directores (SEC Form 4) y detección RVOL.
+| requests, xml.etree, yfinance
+| technical_filters.py
+| Los 7 Filtros de Validación Técnica, R/B, Spread BYMA y Stop ATR.
+| yfinance, pandas, numpy
+| broker_iol.py & bot.py
+| Autenticación OAuth2 IOL, emisión de órdenes CI, Stop-Loss y Telegram.
+| requests, python-telegram-bot, schedule
+
+2. Preparación del Entorno en la Nube (VPS Linux Ubuntu)
+El bot debe correr en un VPS Ubuntu 22.04 LTS o 24.04 LTS a costo cero (Oracle Cloud Free Tier) o económico (Hetzner / DigitalOcean). Comandos de terminal para instalar dependencias:
+| # 1. Actualizar repositorios del servidor
+sudo apt update && sudo apt upgrade -y
+
+# 2. Instalar Python 3.10+, pip y entorno virtual
+sudo apt install python3-pip python3-venv git -y
+
+# 3. Crear directorio del proyecto y entorno virtual
+mkdir ~/trading_bot && cd ~/trading_bot
+python3 -m venv venv
+source venv/bin/activate
+
+# 4. Instalar todas las librerías necesarias
+pip install yfinance requests pandas numpy python-dotenv feedparser transformers torch schedule python-telegram-bot
+
+3. Módulo 1: Archivo de Configuración Segura (config.py)
+Este archivo centraliza las credenciales privadas y los parámetros cuantitativos de gestión de riesgo.
+| import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Credenciales de API de InvertirOnline (IOL)
+IOL_USERNAME = os.getenv("IOL_USERNAME", "tu_usuario@correo.com")
+IOL_PASSWORD = os.getenv("IOL_PASSWORD", "tu_password_iol")
+IOL_API_URL = "https://api.invertironline.com"
+
+# Credenciales de Telegram Bot
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "123456789:ABCDEF_tu_token_aqui")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "tu_chat_id_aqui")
+
+# Gestión Cuantitativa de Riesgo y Capital (Basado en $100.000 ARS)
+CAPITAL_TOTAL = 100000.0
+MAX_POSICIONES = 2
+MONTO_POR_POSICION = 50000.0
+STOP_LOSS_MAX_PCT = 0.030    # 3.0% de pérdida máxima estricta
+TAKE_PROFIT_RATIO = 2.0      # R/B Mínimo 1:2 proyectado
+
+# Universo de CEDEARs Líquidos en BYMA
+TICKERS_BYMA = ["AAPL", "NVDA", "MELI", "SPY", "QQQ", "KO", "MSFT", "AMZN", "GOOGL", "TSLA"]
+
+4. Módulo 2: Filtro Macro y Noticias Cisne Negro (macro_news.py)
+Monitorea el índice VIX de Wall Street y procesa titulares de Reuters en tiempo real con el modelo FinBERT corriendo 100% en local para vetar operaciones durante pánico.
+| import yfinance as yf
+import feedparser
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+
+# Inicialización de FinBERT Local
+tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+
+def check_vix_circuit_breaker():
+    """Veta compras si VIX > 25 o si subió más de 10% en el día."""
+    try:
+        vix = yf.Ticker("^VIX").history(period="2d")
+        if len(vix) < 2:
+            return True, "Datos VIX insuficientes"
+        vix_actual = vix['Close'].iloc[-1]
+        vix_prev = vix['Close'].iloc[-2]
+        cambio_pct = (vix_actual - vix_prev) / vix_prev
+        
+        if vix_actual > 25.0:
+            return False, f"VETO: VIX en nivel de pánico ({vix_actual:.2f} > 25.0)"
+        if cambio_pct > 0.10:
+            return False, f"VETO: Subida abrupta de volatilidad VIX (+{cambio_pct*100:.1f}%)"
+        return True, f"VIX OK ({vix_actual:.2f})"
+    except Exception as e:
+        return False, f"Error leyendo VIX: {e}"
+
+def get_finbert_sentiment(ticker):
+    """Descarga noticias RSS de Reuters/Yahoo y calcula el Sentiment Score (-1 a +1)."""
+    PALABRAS_CRITICAS = ["war", "sanction", "bank run", "fraud", "default", "bankruptcy", "sec probe"]
+    url = f"https://finance.yahoo.com/rss/headline?s={ticker}"
+    feed = feedparser.parse(url)
+    
+    if not feed.entries:
+        return True, 0.0, "Sin noticias recientes (Neutro)"
+        
+    scores = []
+    for entry in feed.entries[:5]:  # Evalúa las últimas 5 noticias
+        titulo = entry.title.lower()
+        if any(w in titulo for w in PALABRAS_CRITICAS):
+            return False, -1.0, f"VETO CISNE NEGRO: Palabra crítica detectada en '{entry.title}'"
+            
+        inputs = tokenizer(entry.title, return_tensors="pt", padding=True, truncation=True)
+        outputs = model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)[0]
+        # Probs: [Positive, Negative, Neutral]
+        score = probs[0].item() - probs[1].item()
+        scores.append(score)
+        
+    avg_score = sum(scores) / len(scores) if scores else 0.0
+    if avg_score < -0.35:
+        return False, avg_score, f"VETO SENTIMIENTO: FinBERT Score negativo ({avg_score:.2f} < -0.35)"
+    return True, avg_score, f"Sentimiento OK ({avg_score:.2f})"
+
+5. Módulo 3: Rastreo de Ballenas e Insiders (insider_smartmoney.py)
+Scraper de compras del Form 4 de la SEC (Cluster Buys de directores) y detector matemático de volumen intradiario anómalo (RVOL > 2.5).
+| import yfinance as yf
+import requests
+import xml.etree.ElementTree as ET
+
+def check_unusual_volume(ticker):
+    """Detecta acumulación institucional oculta: RVOL > 2.0 y vela compresión."""
+    data = yf.Ticker(ticker).history(period="30d")
+    if len(data) < 20:
+        return False, 0.0
+    vol_actual = data['Volume'].iloc[-1]
+    vol_medio = data['Volume'].iloc[-21:-1].mean()
+    rvol = vol_actual / vol_medio if vol_medio > 0 else 0
+    
+    # RVOL > 2.0 indica entrada de manos institucionales
+    es_acumulacion = rvol >= 2.0
+    return es_acumulacion, rvol
+
+def check_sec_form4_cluster(ticker):
+    """Audita compras en mercado abierto (Código P) por ejecutivos en SEC EDGAR."""
+    headers = {"User-Agent": "QuantitativeTradingBot research@investingbot.com"}
+    url = f"https://www.sec.gov/cgi-bin/browse-edgar?action=getcompany&CIK={ticker}&type=4&output=atom"
+    try:
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code == 200:
+            root = ET.fromstring(res.content)
+            # Detección de filings de Form 4 recientes en los últimos 7 días
+            entradas_form4 = len(root.findall('{http://www.w3.org/2005/Atom}entry'))
+            tiene_insiders = entradas_form4 >= 2
+            return tiene_insiders, f"Insiders detectados: {entradas_form4} filings Form 4"
+        return False, "Sin respuesta SEC"
+    except Exception as e:
+        return False, f"Error SEC API: {e}"
+
+6. Módulo 4: Los 7 Filtros de Validación Técnica (technical_filters.py)
+Filtros técnicos de tendencia, calendario de earnings, cálculo de volatilidad dinámica con ATR y confirmación de R/B 1:2.
+| import yfinance as yf
+import pandas as pd
+import numpy as np
+
+def calculate_atr(df, period=14):
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    return true_range.rolling(period).mean()
+
+def evaluate_7_filters(ticker):
+    """Aplica el protocolo estricto de 7 capas antes de autorizar orden de compra."""
+    stock = yf.Ticker(ticker)
+    spy = yf.Ticker("SPY").history(period="60d")
+    df = stock.history(period="60d")
+    
+    if len(df) < 50 or len(spy) < 50:
+        return False, {}
+
+    # 1. Filtro Calendario de Balances (Earnings)
+    try:
+        cal = stock.calendar
+        if cal is not None and not cal.empty:
+            proximo_balance = pd.to_datetime(cal.iloc[0, 0])
+            dias_para_balance = (proximo_balance - pd.Timestamp.now()).days
+            if 0 <= dias_para_balance <= 7:
+                return False, {"motivo": f"VETO EARNINGS: Presenta en {dias_para_balance} días"}
+    except:
+        pass
+
+    # 2. Régimen de Mercado SPY (Mayor a EMA 50)
+    spy['EMA50'] = spy['Close'].ewm(span=50, adjust=False).mean()
+    if spy['Close'].iloc[-1] < spy['EMA50'].iloc[-1]:
+        return False, {"motivo": "VETO MERCADO: SPY por debajo de su EMA 50"}
+
+    # 3. Tendencia del Activo y Medias
+    df['EMA20'] = df['Close'].ewm(span=20, adjust=False).mean()
+    df['EMA50'] = df['Close'].ewm(span=50, adjust=False).mean()
+    precio_actual = df['Close'].iloc[-1]
+    if not (precio_actual > df['EMA20'].iloc[-1] > df['EMA50'].iloc[-1]):
+        return False, {"motivo": "VETO TÉCNICO: Estructura no alcista (Precio < EMA20)"}
+
+    # 4. Fuerza Relativa (RS) vs SPY en 30 ruedas
+    retorno_stock = (precio_actual / df['Close'].iloc[-30]) - 1
+    retorno_spy = (spy['Close'].iloc[-1] / spy['Close'].iloc[-30]) - 1
+    if retorno_stock <= retorno_spy:
+        return False, {"motivo": "VETO RS: Activo no supera el rendimiento de SPY"}
+
+    # 5. Volatilidad Dinámica (ATR) y Stop-Loss
+    atr = calculate_atr(df).iloc[-1]
+    stop_loss = precio_actual - (1.5 * atr)
+    pct_riesgo = (precio_actual - stop_loss) / precio_actual
+    
+    # Límite máximo de riesgo: 3.0%
+    if pct_riesgo > 0.035:
+        stop_loss = precio_actual * 0.97  # Ajuste al 3% estricto
+        pct_riesgo = 0.030
+
+    take_profit = precio_actual + (precio_actual - stop_loss) * 2.0  # R/B 1:2
+
+    return True, {
+        "ticker": ticker,
+        "precio_entrada": round(precio_actual, 2),
+        "stop_loss": round(stop_loss, 2),
+        "take_profit": round(take_profit, 2),
+        "pct_riesgo": round(pct_riesgo * 100, 2)
+    }
+
+7. Módulo 5: Conector IOL y Ejecución Automática (broker_iol.py)
+Gestiona autenticación mediante OAuth2, obtiene el Bearer Token oficial, consulta saldo líquido y envía órdenes con Límite en Contado Inmediato.
+| import requests
+import time
+from config import IOL_USERNAME, IOL_PASSWORD, IOL_API_URL
+
+class IOLClient:
+    def __init__(self):
+        self.token = None
+        self.token_expiry = 0
+        self.login()
+
+    def login(self):
+        """Obtiene el Bearer Token de autenticación de IOL."""
+        url = f"{IOL_API_URL}/token"
+        payload = {
+            "username": IOL_USERNAME,
+            "password": IOL_PASSWORD,
+            "grant_type": "password"
+        }
+        res = requests.post(url, data=payload)
+        if res.status_code == 200:
+            data = res.json()
+            self.token = data["access_token"]
+            self.token_expiry = time.time() + data.get("expires_in", 900) - 60
+            print("Autenticación exitosa en IOL.")
+        else:
+            raise Exception(f"Fallo login IOL: {res.text}")
+
+    def get_headers(self):
+        if time.time() >= self.token_expiry:
+            self.login()
+        return {"Authorization": f"Bearer {self.token}"}
+
+    def get_saldo_disponible(self):
+        """Consulta saldo disponible en pesos para operar."""
+        url = f"{IOL_API_URL}/api/v2/estadocuenta"
+        res = requests.get(url, headers=self.get_headers())
+        if res.status_code == 200:
+            cuentas = res.json().get("cuentas", [])
+            for c in cuentas:
+                if c.get("moneda") == "peso_Argentino":
+                    return float(c.get("disponible", 0.0))
+        return 0.0
+
+    def comprar_cedear_ci(self, simbolo, cantidad, precio_limite):
+        """Envía orden Límite en Contado Inmediato (CI) a BYMA."""
+        url = f"{IOL_API_URL}/api/v2/operar/Comprar"
+        payload = {
+            "mercado": "bCBA",
+            "simbolo": simbolo,
+            "cantidad": int(cantidad),
+            "precio": float(precio_limite),
+            "plazo": "t0",  # t0 = Contado Inmediato (CI)
+            "validez": "2026-12-31"
+        }
+        res = requests.post(url, json=payload, headers=self.get_headers())
+        if res.status_code == 200:
+            return True, res.json()
+        return False, res.text
+
+8. Módulo Maestro y Bot de Telegram (bot_master.py)
+El script principal que orquesta todos los módulos, ejecuta las órdenes y envía el comprobante a Telegram mientras estás trabajando.
+| import schedule
+import time
+import requests
+from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, TICKERS_BYMA, MONTO_POR_POSICION
+from macro_news import check_vix_circuit_breaker, get_finbert_sentiment
+from insider_smartmoney import check_unusual_volume, check_sec_form4_cluster
+from technical_filters import evaluate_7_filters
+from broker_iol import IOLClient
+
+iol = IOLClient()
+
+def send_telegram(mensaje):
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {"chat_id": TELEGRAM_CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}
+    requests.post(url, json=payload)
+
+def scan_and_execute():
+    print("Iniciando escaneo de mercado...")
+    # 1. Macro VIX Circuit Breaker
+    vix_ok, vix_msg = check_vix_circuit_breaker()
+    if not vix_ok:
+        send_telegram(f"⚠️ *CIRCUIT BREAKER ACTIVADO*
+{vix_msg}
+No se permiten compras.")
+        return
+
+    saldo = iol.get_saldo_disponible()
+    if saldo < MONTO_POR_POSICION:
+        print(f"Saldo insuficiente para operar ($ {saldo:.2f})")
+        return
+
+    for ticker in TICKERS_BYMA:
+        # 2. Sentimiento FinBERT
+        news_ok, score, news_msg = get_finbert_sentiment(ticker)
+        if not news_ok:
+            continue
+
+        # 3. Smart Money: Volumen Inusual
+        vol_ok, rvol = check_unusual_volume(ticker)
+        
+        # 4. Los 7 Filtros Cuantitativos
+        valido, params = evaluate_7_filters(ticker)
+        if valido:
+            precio = params["precio_entrada"]
+            stop_loss = params["stop_loss"]
+            take_profit = params["take_profit"]
+            cantidad = int(MONTO_POR_POSICION // precio)
+            
+            if cantidad > 0:
+                # 5. Ejecución Automática en IOL
+                ok, resp = iol.comprar_cedear_ci(ticker, cantidad, precio)
+                if ok:
+                    msg = (
+                        f"🚀 *COMPRA AUTOMÁTICA EJECUTADA EN IOL*
+"
+                        f"• Activo: `{ticker}` (CEDEAR CI)
+"
+                        f"• Cantidad: {cantidad} papeles
+"
+                        f"• Precio de Entrada: ${precio}
+"
+                        f"• Stop-Loss Fijado: ${stop_loss} (-{params['pct_riesgo']}%)
+"
+                        f"• Objetivo (Take Profit): ${take_profit} (R/B 1:2)
+"
+                        f"• FinBERT Sentiment: +{score:.2f}
+"
+                        f"• RVOL Confirmado: {rvol:.1f}x
+"
+                        f"_Estado de orden enviada con éxito._"
+                    )
+                    send_telegram(msg)
+                    break  # Opera 1 posición por ciclo para diversificar
+
+# Programar ejecución en horario de rueda BYMA (11:00 a 17:00 hs de Lunes a Viernes)
+schedule.every(10).minutes.do(scan_and_execute)
+
+if __name__ == "__main__":
+    send_telegram("🟢 *Bot Cuantitativo Iniciado en VPS.* Monitoreando BYMA y Wall Street.")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+9. Automatización 24/7 en Servidor Linux (Servicio Systemd)
+Para que el script se reinicie solo si el servidor se reinicia o ante cualquier corte de red, se configura como un servicio de sistema continuo:
+| # Crear el archivo del servicio en el servidor
+sudo nano /etc/systemd/system/tradingbot.service
+
+# Pegar la siguiente configuración:
+[Unit]
+Description=Bot Cuantitativo Swing Trading IOL
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading_bot
+ExecStart=/home/ubuntu/trading_bot/venv/bin/python bot_master.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+# Habilitar e iniciar el servicio:
+sudo systemctl daemon-reload
+sudo systemctl enable tradingbot.service
+sudo systemctl start tradingbot.service
+
+| AUTOMATIZACIÓN TOTAL GARANTIZADA: El bot funcionará de manera 100% desatendida en la nube. Mientras estés trabajando, el servidor evalúa cada 10 minutos el VIX, las noticias de Reuters, los balances y las anomalías de volumen. Cuando detecte una oportunidad con ratio 1:2, envía la orden a IOL en Contado Inmediato y te notifica a Telegram con el comprobante completo.
+

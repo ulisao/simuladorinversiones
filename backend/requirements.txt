@@ -1,0 +1,28 @@
+# --- Base: API y persistencia ---
+fastapi==0.115.6
+uvicorn[standard]==0.32.1
+sqlalchemy==2.0.36
+pydantic==2.10.3
+python-dotenv==1.2.3
+
+# --- Datos de mercado y cálculo técnico (Fases 2, 3, 5 y 9) ---
+yfinance==1.7.0
+pandas==3.0.5
+numpy==2.5.2
+requests==2.34.2
+
+# --- Gestión de salidas (Tarea 3.5): cierre preventivo 16:50 hs ART ---
+pytz==2026.3.post1
+
+# --- Filtro de riesgo y noticias (Fase 4) ---
+# OJO: transformers + torch pesan ~2,5 GB instalados y FinBERT necesita ~1 GB de
+# RAM para inferencia. Un VPS free tier de 512 MB - 1 GB NO alcanza. Si el deploy
+# corre en un servidor chico, hay que sacar estas dos líneas: risk_filters.py está
+# escrito para degradar sin ellas (ver docstring del módulo).
+feedparser==6.0.14
+transformers==5.16.1
+torch==2.13.0
+
+# --- Testing ---
+pytest==9.1.1
+httpx==0.28.1

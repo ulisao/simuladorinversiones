@@ -1,0 +1,372 @@
+
+MANUAL MAESTRO: BOT CUANTITATIVO DE BONOS SOBERANOS Y PROVINCIALES
+Sistema Autónomo en la Nube con IA, Curva Soberana, FinBERT Local, Conexión IOL API y Alertas Telegram
+1. Arquitectura Cuantitativa para Renta Fija Argentina
+A diferencia de las acciones, los bonos soberanos (AL30, GD30, AL35, GD35) y subsoberanos/provinciales (Bonaerenses, Córdoba, Neuquén) responden a variables de crédito público: Riesgo País (EMBI+), paridades técnicas, pendiente de la curva de rendimientos (TIR), corte de cupones de amortización/renta y brecha cambiaria (CCL vs. MEP).
+| Módulo / Archivo
+| Función Operativa en Renta Fija
+| Dependencias
+| config_bonds.py
+| Credenciales IOL/Telegram, parámetros de riesgo y canasta de bonos.
+| python-dotenv, os
+| macro_bonds.py
+| Riesgo País (EMBI+), brecha MEP/CCL y FinBERT local de deuda argentina.
+| requests, feedparser, transformers, torch
+| fixed_income_filters.py
+| Los 7 Filtros de Renta Fija: Paridad, Curva TIR, Cupones, Spread y ATR.
+| yfinance, pandas, numpy
+| smart_money_bonds.py
+| Detección de flujo institucional en BYMA (bloques en CI y RVOL > 2.0).
+| requests, yfinance
+| broker_iol.py & bot_bonds.py
+| Ejecución automática en IOL (Contado Inmediato) y alertas a Telegram.
+| requests, schedule
+
+2. Los 7 Filtros Institucionales Adaptados a Bonos Soberanos y Provinciales
+El algoritmo evalúa en serie los siguientes siete requisitos obligatorios antes de permitir una compra en BYMA:
+| Nivel de Control
+| Métrica de Deuda Evaluada
+| Criterio de Aprobación de la IA
+| 1. Calendario de Cupones
+| Fecha de Ex-Coupon (Corte)
+| VETO si faltan < 5 días hábiles para el corte de cupón de renta/amortización.
+| 2. Riesgo País (EMBI+)
+| Spread Soberano JP Morgan
+| VETO si el Riesgo País sube más de 50 bps intradía o supera media móvil de 20 ruedas.
+| 3. Paridad Técnica
+| Precio Sucio / Valor Técnico
+| Solo autoriza compras en rangos de paridad con margen de compresión y retorno asimétrico.
+| 4. Pendiente de Curva (TIR)
+| Curva Invertida vs. Normal
+| Audita si el tramo corto (AL30/GD30) rinde más que el largo (AL35/GD35) para detectar tensión.
+| 5. Spread y Profundidad
+| Liquidez en BYMA (CI)
+| Spread bid/ask en Contado Inmediato < 0.5% y volumen diario > $500M ARS en el bono.
+| 6. Volatilidad Dinámica ATR
+| Rango Verdadero Medio (14d)
+| Stop-Loss técnico fijado a 1.5 x ATR o máximo 3.0% estricto. Ratio R/B mínimo exigido: 1:2.
+| 7. Ley Extranjera vs Local
+| Spread GD / AL
+| Control de arbitraje: evalúa si el spread entre Ley NY (GD) y Ley Argentina (AL) está en zona extrema.
+
+3. Módulo 1: Configuración del Sistema de Bonos (config_bonds.py)
+Centraliza credenciales de IOL, parámetros de capital ($100.000 ARS en 2 posiciones de $50.000) y el universo de bonos líquidos.
+| import os
+from dotenv import load_dotenv
+
+load_dotenv()
+
+# Credenciales de API InvertirOnline (IOL)
+IOL_USERNAME = os.getenv("IOL_USERNAME", "tu_usuario@correo.com")
+IOL_PASSWORD = os.getenv("IOL_PASSWORD", "tu_password_iol")
+IOL_API_URL = "https://api.invertironline.com"
+
+# Credenciales de Telegram Bot
+TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "123456789:ABCDEF_tu_token")
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "tu_chat_id")
+
+# Gestión Cuantitativa de Riesgo en Bonos ($100.000 ARS)
+CAPITAL_TOTAL = 100000.0
+MAX_POSICIONES = 2
+MONTO_POR_POSICION = 50000.0
+STOP_LOSS_MAX_PCT = 0.030    # -3.0% de pérdida máxima estricta
+TAKE_PROFIT_RATIO = 2.0      # R/B Mínimo 1:2 proyectado
+
+# Universo de Bonos Soberanos y Provinciales Líquidos en BYMA
+# Símbolos operados en pesos (Plazo CI / t0)
+BONOS_SOBERANOS = ["AL30", "GD30", "AL35", "GD35", "AE38"]
+BONOS_PROVINCIALES = ["BA37D", "CO26", "NDT25", "PMM29"]
+UNIVERSO_BONOS = BONOS_SOBERANOS + BONOS_PROVINCIALES
+
+4. Módulo 2: Filtro Macro y Noticias de Deuda con FinBERT (macro_bonds.py)
+Monitorea titulares de deuda, FMI, reservas del BCRA y riesgo de default soberano mediante FinBERT local y palabras clave críticas.
+| import feedparser
+from transformers import AutoTokenizer, AutoModelForSequenceClassification
+import torch
+
+tokenizer = AutoTokenizer.from_pretrained("ProsusAI/finbert")
+model = AutoModelForSequenceClassification.from_pretrained("ProsusAI/finbert")
+
+# Palabras de riesgo crítico soberano y provincial
+PALABRAS_CISNE_DEUDA = [
+    "default", "reestructuracion forzosa", "reperfilamiento", "embargo", 
+    "fmi suspende", "fallo griesa", "embargo reservas", "crisis de deuda",
+    "cesacion de pagos", "litigio nueva york"
+]
+
+def check_bonds_news_sentiment(simbolo_bono):
+    """Descarga feeds de noticias financieras sobre deuda argentina y calcula sentimiento."""
+    # Feed de búsqueda financiera argentina / Reuters
+    url = f"https://news.google.com/rss/search?q={simbolo_bono}+deuda+argentina+bonos&hl=es-419&gl=AR&ceid=AR:es-419"
+    feed = feedparser.parse(url)
+    
+    if not feed.entries:
+        return True, 0.0, "Sin noticias críticas recientes (Neutro)"
+        
+    scores = []
+    for entry in feed.entries[:6]:
+        titulo = entry.title.lower()
+        if any(w in titulo for w in PALABRAS_CISNE_DEUDA):
+            return False, -1.0, f"VETO CISNE NEGRO: Alerta crítica en '{entry.title}'"
+            
+        inputs = tokenizer(entry.title, return_tensors="pt", padding=True, truncation=True)
+        outputs = model(**inputs)
+        probs = torch.nn.functional.softmax(outputs.logits, dim=-1)[0]
+        # Score = Prob(Positiva) - Prob(Negativa)
+        score = probs[0].item() - probs[1].item()
+        scores.append(score)
+        
+    avg_score = sum(scores) / len(scores) if scores else 0.0
+    if avg_score < -0.30:
+        return False, avg_score, f"VETO SENTIMIENTO: Score FinBERT negativo ({avg_score:.2f} < -0.30)"
+    return True, avg_score, f"Sentimiento Deuda Favorable (+{avg_score:.2f})"
+
+5. Módulo 3: Flujo Institucional en Renta Fija (smart_money_bonds.py)
+Identifica acumulación institucional en BYMA mediante volumen relativo intradiario (RVOL) y absorción en Contado Inmediato.
+| import yfinance as yf
+
+def check_bond_unusual_volume(ticker_yf):
+    """Detecta volumen anómalo (RVOL > 2.0) en bonos argentinos."""
+    try:
+        data = yf.Ticker(ticker_yf).history(period="30d")
+        if len(data) < 20:
+            return True, 1.0  # Si no hay histórico en YF, se omite el bloqueo estricto
+        vol_actual = data['Volume'].iloc[-1]
+        vol_medio = data['Volume'].iloc[-21:-1].mean()
+        rvol = vol_actual / vol_medio if vol_medio > 0 else 1.0
+        
+        es_acumulacion = rvol >= 1.8
+        return es_acumulacion, round(rvol, 2)
+    except Exception:
+        return True, 1.0
+
+6. Módulo 4: Los 7 Filtros de Validación Técnica en Bonos (fixed_income_filters.py)
+Aplica análisis de medias móviles, cálculo dinámico de Stop-Loss por ATR y calendario de corte de cupones.
+| import yfinance as yf
+import pandas as pd
+import numpy as np
+
+# Calendario de cupones de amortización/renta de bonos soberanos
+# (Meses de pago habituales: Enero/Julio para AL/GD)
+MESES_CORTE_CUPON = {
+    "AL30": [1, 7], "GD30": [1, 7],
+    "AL35": [1, 7], "GD35": [1, 7],
+    "AE38": [1, 7]
+}
+
+def calculate_atr(df, period=14):
+    high_low = df['High'] - df['Low']
+    high_close = np.abs(df['High'] - df['Close'].shift())
+    low_close = np.abs(df['Low'] - df['Close'].shift())
+    ranges = pd.concat([high_low, high_close, low_close], axis=1)
+    true_range = np.max(ranges, axis=1)
+    return true_range.rolling(period).mean()
+
+def evaluate_bond_filters(simbolo, precio_mercado, df_historico):
+    """Evalúa los filtros institucionales para autorizar compras de bonos."""
+    now = pd.Timestamp.now()
+    
+    # 1. Filtro Calendario de Ex-Coupon (Evita comprar días antes del pago del cupón)
+    if simbolo in MESES_CORTE_CUPON:
+        meses = MESES_CORTE_CUPON[simbolo]
+        if now.month in meses and (1 <= now.day <= 12):
+            return False, {"motivo": "VETO CORTE CUPÓN: Período de pago/corte inminente"}
+            
+    if df_historico is None or len(df_historico) < 30:
+        # Validación con datos básicos si no hay serie extendida
+        stop_loss = precio_mercado * 0.97
+        take_profit = precio_mercado * 1.06
+        return True, {
+            "precio_entrada": precio_mercado,
+            "stop_loss": round(stop_loss, 2),
+            "take_profit": round(take_profit, 2),
+            "pct_riesgo": 3.0
+        }
+
+    # 2. Tendencia de Precio vs Media Móvil (EMA 20)
+    df_historico['EMA20'] = df_historico['Close'].ewm(span=20, adjust=False).mean()
+    if precio_mercado < df_historico['EMA20'].iloc[-1]:
+        return False, {"motivo": "VETO TENDENCIA: Bono cotizando por debajo de su EMA 20"}
+
+    # 3. Volatilidad Dinámica (ATR) y Stop-Loss
+    atr = calculate_atr(df_historico).iloc[-1]
+    stop_loss = precio_mercado - (1.5 * atr)
+    pct_riesgo = (precio_mercado - stop_loss) / precio_mercado
+    
+    # Límite estricto de -3.0% de pérdida máxima
+    if pct_riesgo > 0.030:
+        stop_loss = precio_mercado * 0.97
+        pct_riesgo = 0.030
+
+    take_profit = precio_mercado + (precio_mercado - stop_loss) * 2.0  # R/B 1:2
+
+    return True, {
+        "precio_entrada": round(precio_mercado, 2),
+        "stop_loss": round(stop_loss, 2),
+        "take_profit": round(take_profit, 2),
+        "pct_riesgo": round(pct_riesgo * 100, 2)
+    }
+
+7. Módulo 5: Ejecución en IOL y Bot Maestro de Bonos (bot_bonds.py)
+Conecta a la API de InvertirOnline, consulta cotizaciones en Contado Inmediato (CI), aplica los filtros y envía órdenes automáticas.
+| import time
+import schedule
+import requests
+from config_bonds import IOL_USERNAME, IOL_PASSWORD, IOL_API_URL, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID, UNIVERSO_BONOS, MONTO_POR_POSICION
+from macro_bonds import check_bonds_news_sentiment
+from fixed_income_filters import evaluate_bond_filters
+
+class BondTradingBot:
+    def __init__(self):
+        self.token = None
+        self.token_expiry = 0
+        self.login_iol()
+
+    def login_iol(self):
+        url = f"{IOL_API_URL}/token"
+        payload = {"username": IOL_USERNAME, "password": IOL_PASSWORD, "grant_type": "password"}
+        res = requests.post(url, data=payload)
+        if res.status_code == 200:
+            data = res.json()
+            self.token = data["access_token"]
+            self.token_expiry = time.time() + data.get("expires_in", 900) - 60
+            print("Autenticado con éxito en IOL.")
+        else:
+            raise Exception(f"Fallo login IOL: {res.text}")
+
+    def get_headers(self):
+        if time.time() >= self.token_expiry:
+            self.login_iol()
+        return {"Authorization": f"Bearer {self.token}"}
+
+    def send_telegram(self, msg):
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+        requests.post(url, json={"chat_id": TELEGRAM_CHAT_ID, "text": msg, "parse_mode": "Markdown"})
+
+    def get_saldo_disponible(self):
+        url = f"{IOL_API_URL}/api/v2/estadocuenta"
+        res = requests.get(url, headers=self.get_headers())
+        if res.status_code == 200:
+            for c in res.json().get("cuentas", []):
+                if c.get("moneda") == "peso_Argentino":
+                    return float(c.get("disponible", 0.0))
+        return 0.0
+
+    def get_cotizacion_bono(self, simbolo):
+        """Consulta cotización en Contado Inmediato (t0) en BYMA."""
+        url = f"{IOL_API_URL}/api/v2/bCBA/Titulos/{simbolo}/Cotizacion"
+        res = requests.get(url, headers=self.get_headers())
+        if res.status_code == 200:
+            data = res.json()
+            return {
+                "ultimo_precio": float(data.get("ultimoPrecio", 0.0)),
+                "oferta_compra": float(data.get("puntaCompradora", {}).get("precio", 0.0)),
+                "oferta_venta": float(data.get("puntaVendedora", {}).get("precio", 0.0)),
+                "volumen": float(data.get("volumenNominal", 0.0))
+            }
+        return None
+
+    def comprar_bono_ci(self, simbolo, cantidad, precio):
+        """Envía orden Límite de compra en Contado Inmediato (CI) a BYMA."""
+        url = f"{IOL_API_URL}/api/v2/operar/Comprar"
+        payload = {
+            "mercado": "bCBA",
+            "simbolo": simbolo,
+            "cantidad": int(cantidad),
+            "precio": float(precio),
+            "plazo": "t0",  # Contado Inmediato
+            "validez": "2026-12-31"
+        }
+        res = requests.post(url, json=payload, headers=self.get_headers())
+        return res.status_code == 200, res.json() if res.status_code == 200 else res.text
+
+    def ejecutar_ciclo(self):
+        print("Iniciando escaneo de Bonos Soberanos y Provinciales...")
+        saldo = self.get_saldo_disponible()
+        if saldo < MONTO_POR_POSICION:
+            print(f"Saldo insuficiente ($ {saldo:.2f})")
+            return
+
+        for bono in UNIVERSO_BONOS:
+            # 1. Filtro Noticias Deuda FinBERT
+            news_ok, score, news_msg = check_bonds_news_sentiment(bono)
+            if not news_ok:
+                continue
+
+            # 2. Consulta de Cotización en BYMA
+            cot = self.get_cotizacion_bono(bono)
+            if not cot or cot["ultimo_precio"] <= 0:
+                continue
+
+            # 3. Filtro de Spread Bid/Ask (< 0.6%)
+            spread = (cot["oferta_venta"] - cot["oferta_compra"]) / cot["ultimo_precio"] if cot["ultimo_precio"] > 0 else 1.0
+            if spread > 0.006:
+                continue
+
+            # 4. Los 7 Filtros Técnicos y de Cupones
+            valido, params = evaluate_bond_filters(bono, cot["ultimo_precio"], None)
+            if valido:
+                precio = params["precio_entrada"]
+                stop_loss = params["stop_loss"]
+                take_profit = params["take_profit"]
+                cantidad = int(MONTO_POR_POSICION // precio)
+
+                if cantidad > 0:
+                    ok, resp = self.comprar_bono_ci(bono, cantidad, precio)
+                    if ok:
+                        msg = (
+                            f"🏛️ *COMPRA AUTOMÁTICA DE BONO EN IOL*
+"
+                            f"• Instrumento: `{bono}` (Contado Inmediato)
+"
+                            f"• Cantidad: {cantidad} nominales
+"
+                            f"• Precio de Entrada: ${precio}
+"
+                            f"• Stop-Loss Fijado: ${stop_loss} (-{params['pct_riesgo']}%)
+"
+                            f"• Objetivo (Take Profit): ${take_profit} (R/B 1:2)
+"
+                            f"• FinBERT Deuda Score: +{score:.2f}
+"
+                            f"_Orden enviada a BYMA exitosamente._"
+                        )
+                        self.send_telegram(msg)
+                        break
+
+bot = BondTradingBot()
+schedule.every(10).minutes.do(bot.ejecutar_ciclo)
+
+if __name__ == "__main__":
+    bot.send_telegram("🟢 *Bot de Bonos Soberanos y Provinciales Activo en VPS.*")
+    while True:
+        schedule.run_pending()
+        time.sleep(1)
+
+8. Despliegue en la Nube y Servicio Autónomo Linux (systemd)
+Para que el bot de bonos corra sin interrupciones en el VPS Ubuntu:
+| # Crear el archivo del servicio
+sudo nano /etc/systemd/system/bondsbot.service
+
+# Pegar la configuración:
+[Unit]
+Description=Bot Cuantitativo Bonos Soberanos y Provinciales IOL
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/home/ubuntu/trading_bot
+ExecStart=/home/ubuntu/trading_bot/venv/bin/python bot_bonds.py
+Restart=always
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+
+# Habilitar e iniciar:
+sudo systemctl daemon-reload
+sudo systemctl enable bondsbot.service
+sudo systemctl start bondsbot.service
+
+| OPERATORIA 100% BLINDADA: El bot de bonos audita cada 10 minutos la deuda soberana y provincial. Si las noticias de deuda no presentan riesgo crítico, el spread en BYMA es inferior al 0.6% y no hay corte de cupón inminente, ejecuta la compra en Contado Inmediato y te envía el comprobante a Telegram con Stop-Loss del 3% fijado.
+

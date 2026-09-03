@@ -1,0 +1,22 @@
+# Python
+backend/venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Base de datos local
+backend/*.db
+
+# Credenciales
+.env
+backend/.env
+credenciales_google.json
+
+# Next.js
+frontend/node_modules/
+frontend/.next/
+frontend/out/
+
+# Sistema
+.DS_Store
+Thumbs.db

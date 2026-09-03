@@ -1,0 +1,88 @@
+
+GUÍA INTEGRAL DE SISTEMAS DE INVERSIÓN CON IA
+Arquitectura Gratuita vs. Paga, Integración de Noticias Globales, Filtro de Pánico y Mitigación de Riesgo
+――――――――――――――――――――――――――――――――――――――――――――――――――
+1. Fuentes de Datos: ¿De Dónde Saca la Información la IA?
+Para que un sistema cuantitativo inteligente tome decisiones fundamentadas de compra o venta en activos (CEDEARs, bonos, acciones), la IA no adivina: extrae datos de 4 fuentes fundamentales estructuradas:
+A. Series Temporales de Precios y Volúmenes (OHLCV)
+Utilidad: Permite computar volatilidad histórica, liquidez real, medias móviles, bandas de Bollinger, RSI y volumen anormal.
+Fuentes Gratuitas: yfinance (Python), APIs REST de brokers locales para puntas de compra/venta de CEDEARs, Alpha Vantage (tier gratuito).
+Fuentes Profesionales: Polygon.io, EODHD, Tiingo, Bloomberg Data Feed.
+B. Datos Fundamentales y Estados Contables
+Utilidad: Extracción de ratios financieros (P/E, EV/EBITDA, ROE, Deuda Neta/EBITDA, Free Cash Flow) y reportes trimestrales (10-Q) y anuales (10-K).
+Fuentes Gratuitas: SEC EDGAR API (base de datos pública y gratuita de la Comisión de Bolsa y Valores de EE. UU.), librería FundamentalAnalysis, Finnhub.
+Fuentes Profesionales: Financial Modeling Prep (FMP API), Zacks Investment Research, S&P Capital IQ.
+C. Variables Macroeconómicas y Tasas
+Utilidad: Monitorea tasas de referencia (FED Funds Rate), curva de rendimiento de bonos (10Y - 2Y para alertas de recesión), inflación esperada y brecha cambiaria (CCL/MEP).
+Fuentes Gratuitas: FRED API (Federal Reserve Bank of St. Louis - 100% gratuita), BCRA API pública.
+Fuentes Profesionales: Macrobond, Refinitiv Datastream.
+D. Procesamiento de Lenguaje Natural (NLP) y Sentimiento de Noticias
+Utilidad: Cuantifica en tiempo real si el tono de las noticias, reportes y transcripciones corporativas es alcista, neutro o de pánico extremo.
+Fuentes Gratuitas: Scraping de RSS feeds financieros (Reuters, Yahoo Finance, Investing), Reddit API, modelos locales FinBERT de Hugging Face.
+Fuentes Profesionales: NewsAPI Developer, Benzinga Newsfeed API, RavenPack, OpenAI API / Anthropic API.
+2. Procesamiento de Noticias Globales y Filtro de Crisis (Cisnes Negros)
+Para que la IA no opere a ciegas ante conflictos bélicos, caídas sistémicas o malas noticias corporativas, se incorpora una doble capa de protección que puede vetar compras automáticamente:
+A. El Modelo de Sentimiento Financiero (FinBERT)
+En lugar de leer noticias como un humano, un modelo de Deep Learning open-source especializado en finanzas (FinBERT) corre localmente en Python y asigna a cada titular un puntaje matemático de sentimiento:
+Escala de Sentimiento: Puntuación entre -1.0 (Pánico / Muy Negativo), 0.0 (Neutro) y +1.0 (Optimismo / Muy Positivo).
+Filtro por Activo: Si la empresa del CEDEAR acumula un puntaje promedio menor a -0.35 en las últimas 24 horas, la IA bloquea cualquier orden de compra aunque el análisis técnico sea positivo.
+B. El 'Interruptor de Emergencia' Global (Circuit Breaker)
+El sistema evalúa indicadores globales antes de habilitar cualquier operación de la cartera:
+Índice VIX (Índice del Miedo): Mide la volatilidad implícita del S&P 500. Si supera los 25 puntos o sube más de un 10% en el día, el sistema entra en modo defensivo.
+Detección de Palabras Clave Críticas: Búsqueda automatizada en titulares globales de términos de alto riesgo (ej. 'war', 'default', 'sanctions', 'sec investigation', 'bank failure'). Si se disparan alertas múltiples, se cancelan las compras.
+C. Esquema de Decisión Operativa
+| [ Señal Técnica de Compra Generada ]                  │                  ▼   ¿Existen Noticias o Eventos de Alto Riesgo?    ├── ¿VIX > 25 puntos o suba intradiaria > 10%?    ├── ¿Sentiment Score del Activo < -0.35?    └── ¿Alertas críticas geopolíticas / macroactivadas?                  │         ┌────────┴────────┐         ▼                 ▼       [ SÍ ]            [ NO ]         │                 │   VETO AUTOMÁTICO    ORDEN AUTORIZADA  "Compra cancelada   "Ejecutar compra   por riesgo global"  con Stop-Loss" 
+
+3. Configuración a Costo Cero ($0 USD / $0 ARS al Mes)
+Arquitectura recomendada para maximizar la rentabilidad neta sin pagar suscripciones que consuman el capital:
+Arquitectura y Herramientas
+Entorno de Ejecución: Python 3.10+ en VS Code / JupyterLab local, o en la nube vía Google Colab (GPU T4 gratuita).
+Pipeline de Datos: yfinance para precios históricos, SEC-EDGAR-Downloader para balances, feedparser para noticias RSS, y fredapi para macroeconomía.
+Motores de IA: LightGBM / XGBoost para ranking y asignación tabular de activos. FinBERT (vía Transformers y PyTorch) para análisis de sentimiento local.
+Almacenamiento: Base de datos SQLite local o archivos Parquet comprimidos.
+Alertas: Bot de Telegram gratuito que envía la orden sugerida y el resumen de noticias a tu celular al cierre de cada jornada.
+4. Configuración con Infraestructura Paga y Precios Detallados
+Opciones profesionales pagas para operaciones en la nube 24/7 y modelos LLM avanzados:
+| Categoría
+| Servicio / Herramienta
+| Costo Mensual Estimado
+| Aporte al Sistema
+| Datos de Mercado
+| Financial Modeling Prep / Polygon Starter
+| USD 19 - 29 / mes(~$25.000 - $38.000 ARS)
+| Balances estructurados en JSON, ratios en tiempo real, histórico sin límites.
+| Servidor / Hosting
+| VPS en la nube (DigitalOcean / Hetzner)
+| USD 6 - 12 / mes(~$8.000 - $16.000 ARS)
+| Ejecución continua 24/7 sin depender de la computadora personal.
+| Modelos LLM (IA)
+| OpenAI API (GPT-4o-mini) / Anthropic API
+| USD 5 - 15 / mes(~$6.500 - $20.000 ARS)
+| Lectura profunda de reportes de balances y síntesis cualitativa de noticias.
+| Alertas y Plataforma
+| TradingView Pro / Premium
+| USD 15 - 30 / mes(~$20.000 - $40.000 ARS)
+| Backtesting visual rápido, screeners intradía y webhooks automáticos.
+| TOTAL COMBO PAGO
+| Infraestructura Cuantitativa Completa
+| USD 45 - 85 / mes(~$60.000 - $115.000 ARS)
+| Sistema profesional completo en la nube con lectura masiva de datos.
+
+5. Evaluación Estratégica: ¿Es Buena o Mala Idea?
+A. Por qué es una EXCELENTE IDEA (A Costo Cero)
+Disciplina Emocional: Elimina sesgos psicológicos de euforia (FOMO) y pánico en caídas.
+Eficiencia de Tiempo: Permite evaluar 50 CEDEARs y balances en segundos con código local.
+Cero Arrastre de Costos: Al no pagar costos fijos mensuales, el capital rinde al 100% neto.
+Escalabilidad Total: La misma lógica sirve para carteras pequeñas o capitales grandes.
+B. Las Trampas que la Convierten en una MALA IDEA
+La Trampa del Trading Diario: Las comisiones de broker y el spread en operaciones de 24 hs destruyen el capital. En plazos tan cortos el mercado es puro ruido estadístico.
+Costos Fijos Prematuros: Pagar $80.000 ARS/mes en una cartera chica genera una pérdida asegurada antes de empezar.
+Estrategia Recomendada: El Enfoque Ganador: Swing Trading Semanal (operaciones de 3 a 10 días capturando movimientos de 3% a 8%).
+6. Puntos Críticos para Maximizar Ganancias y Proteger Capital
+| ADVERTENCIA DE RIESGO PROFESIONAL: En los mercados NO existen 'ganancias seguras'. El éxito profesional se basa en la Esperanza Matemática Positiva: tener un sistema que corte rápido las pérdidas y deje correr las ganancias, respaldado por un filtro estricto de noticias y régimen de mercado.
+
+1. Stop-Loss Obligatorio: Toda orden ejecutada debe incluir un límite de pérdida automático (ej. -2.5% a -3.5%).
+2. Control de Posición (Position Sizing): Máximo 15% a 20% del capital total en un solo activo para blindarse ante riesgos corporativos.
+3. Datos Point-in-Time: Al entrenar modelos, usar únicamente datos que eran públicos en la fecha histórica analizada.
+4. Filtro de Liquidez: Operar solo CEDEARs y activos con alto volumen diario para entrar y salir sin pagar sobreprecios.
+5. Refugio en Liquidez Dolarizada: Ante picos del VIX o noticias globales graves, el sistema ordena quedar 100% en liquidez (USD/USDT).

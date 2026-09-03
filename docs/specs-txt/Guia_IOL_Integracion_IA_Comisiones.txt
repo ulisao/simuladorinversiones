@@ -1,0 +1,43 @@
+
+GUÍA OPERATIVA: INTEGRACIÓN DE IA CON INVERTIRONLINE (IOL)
+Estructura de Comisiones Exactas, Conexión por API, Plazos de Liquidación y Gestión de Liquidez
+――――――――――――――――――――――――――――――――――――――――――――――――――
+1. Estructura Exacta de Comisiones e Impuestos en IOL
+Para operar CEDEARs, acciones y bonos en InvertirOnline (IOL), la fricción matemática total por cada operación se desglosa según las normativas vigentes de BYMA y AFIP:
+| Concepto / Cargo
+| Alícuota Aplicada
+| Detalle Técnico
+| Comisión Estándar IOL
+| 0.5000%
+| Arancel del broker minorista por tramo de operación.
+| Derechos de Mercado (BYMA)
+| 0.0800%
+| Arancel institucional regulatorio de Bolsas y Mercados Argentinos.
+| IVA sobre Aranceles (21%)
+| 0.1218%
+| 21% aplicado sobre la suma de la comisión y los derechos de mercado.
+| COSTO REAL POR TRAMO
+| 0.7018%
+| Costo neto retenido en cada compra o cada venta individual.
+| COSTO TOTAL IDA Y VUELTA
+| 1.4036%
+| Umbral mínimo obligatorio de suba para alcanzar el punto de equilibrio (Break-even).
+
+2. Ventajas Técnicas de Conectar tu Sistema con InvertirOnline
+A. API Oficial Abierta (Automatización a Costo Cero)
+Acceso Institucional: InvertirOnline ofrece una API REST oficial pública (api.invertironline.com) para todos los usuarios con cuenta comitente activa.
+Funcionalidades Automatizadas: Un script de Python puede consultar en tiempo real el saldo disponible en pesos y dólares, la tenencia actual del portafolio y los precios de caja de puntas (Bid/Ask) sin pagar terminales externas.
+Ejecución Directa: Permite en fases avanzadas emitir órdenes de compra o venta programadas mediante tokens seguros de autenticación OAuth 2.0.
+B. Plazos de Liquidación: Contado Inmediato (CI) vs. 24 Horas
+Plazo Normal 24 hs (T+1): Es el plazo estándar en Argentina. Ofrece el mayor volumen operativo y spreads más ajustados en la mayoría de los CEDEARs (ideal para Swing Trading semanal de 3 a 10 días).
+Contado Inmediato (CI / T+0): Permite disponer de los fondos líquidos en la cuenta en el mismo instante en que se ejecuta la orden. Es útil para rotaciones tácticas rápidas o salidas inmediatas ante señales de pánico.
+C. Cuenta Remunerada y Dólar MEP Integrado
+Rendimiento de Liquidez: La liquidez que no esté asignada a CEDEARs puede colocarse automáticamente en la cuenta remunerada de IOL o en cauciones bursátiles para generar rendimiento diario.
+Resguardo en Moneda Dura: Permite dolarizar saldos de forma directa comprando MEP/CCL cuando la IA detecte alertas de régimen de mercado bajista o picos en el índice VIX.
+3. Protocolo Operativo para Implementar el Sistema con IOL
+| REGLA DE SEGURIDAD OPERATIVA: Antes de conectar el script para operar de forma automática en tu cuenta comitente, validá el sistema cargando las órdenes manualmente en el simulador Excel durante un período de prueba de 3 a 4 semanas.
+
+1. Generación de Credenciales API: Solicitar o habilitar las credenciales de API desde la sección de configuración de tu cuenta en IOL (usuario, contraseña y clave de desarrollador).
+2. Monitoreo Pasivo (Solo Lectura): Configurar un script en Python que consulte las cotizaciones al cierre del mercado (17:00 hs) y procese el ranking de CEDEARs con las noticias.
+3. Carga en el Simulador Excel: Cada señal generada se anota en el 'Simulador_Inversiones_IA_Paper_Trading.xlsx' para auditar si el resultado neto supera el 1.4036% de costos totales.
+4. Paso a Producción: Una vez confirmada la tasa de acierto y la esperanza matemática positiva, se evalúa pasar a operar con montos moderados reales.
