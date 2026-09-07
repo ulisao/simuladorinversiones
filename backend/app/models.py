@@ -7,7 +7,7 @@ original: fecha, ticker, cantidad, precios de entrada/salida). Todo lo demás
 fórmulas que la planilla — así nunca se desincroniza un valor guardado con la
 config de comisiones vigente.
 """
-from sqlalchemy import Column, Integer, String, Float, Date
+from sqlalchemy import Boolean, Column, Integer, String, Float, Date
 from .database import Base
 
 
@@ -45,6 +45,13 @@ class Trade(Base):
         String, nullable=False, index=True, server_default="SWING", default="SWING"
     )
 
+    # Tarea 6.2: marca si la operación ya se espejó a Google Sheets. Existe solo
+    # para que un segundo click en "Sincronizar" no duplique filas — la hoja no
+    # tiene forma de deduplicar sola, `append_row` agrega siempre al final.
+    sincronizado_sheets = Column(
+        Boolean, nullable=False, server_default="0", default=False, index=True
+    )
+
 
 # ---------- Gestión de salidas (PositionManager) ----------
 
@@ -55,7 +62,7 @@ def _ahora_utc() -> datetime:
     """`datetime.utcnow` está deprecado y sale en una versión futura de Python."""
     return datetime.now(timezone.utc)
 
-from sqlalchemy import Boolean, DateTime, ForeignKey  # noqa: E402
+from sqlalchemy import DateTime, ForeignKey  # noqa: E402
 
 
 class PositionState(Base):

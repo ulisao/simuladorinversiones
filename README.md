@@ -157,6 +157,67 @@ y `app/config.py` es el único módulo que las lee.
 > `IOL_USERNAME`/`IOL_PASSWORD` son los endpoints `/iol/saldo` y `/mercado/ccl`,
 > que devuelven un `503` con el motivo en castellano.
 
+### Autenticación de la API
+
+Todas las rutas piden el header `X-API-Key`, salvo `/health` y la documentación.
+
+```bash
+curl -H "X-API-Key: $API_KEY" http://127.0.0.1:8123/dashboard
+```
+
+```mermaid
+flowchart TD
+    R[Request] --> P{¿/health o /docs?}
+    P -- sí --> OK[Pasa]
+    P -- no --> D{¿API_AUTH_DESHABILITADA?}
+    D -- sí --> WARN[Pasa<br/>con warning en el log]
+    D -- no --> K{¿hay API_KEY?}
+    K -- no --> E503[503<br/>la API no está configurada]
+    K -- sí --> H{¿header correcto?}
+    H -- no --> E401[401]
+    H -- sí --> OK
+```
+
+Configuración:
+
+```bash
+# 1. Generar una clave.
+python -c "import secrets; print(secrets.token_urlsafe(32))"
+
+# 2. backend/.env
+API_KEY=<la clave generada>
+
+# 3. frontend/.env.local — tiene que ser la MISMA.
+NEXT_PUBLIC_API_KEY=<la clave generada>
+
+# 4. Comprobar (no pide clave, y dice en qué modo quedó).
+curl -s http://127.0.0.1:8123/health
+# {"status":"ok","auth":{"activa":true,"motivo":""}}
+```
+
+> [!warning] Falla cerrada: sin `API_KEY` la API no atiende
+> Responde **503** a todo salvo `/health`. Es deliberado: si el default fuera
+> "dejar pasar", un `.env` mal copiado dejaría la API abierta sin que nadie se
+> entere. Para correr sin auth hay que pedirlo a mano con
+> `API_AUTH_DESHABILITADA=true`, y solo tiene sentido en loopback.
+
+> [!note] `/health` queda público a propósito
+> Para que un monitor externo o `systemd` puedan sondear el servicio sin que haya
+> que repartirles la credencial. No revela nada: estado y si la auth está activa,
+> nunca la clave.
+
+> [!warning] `NEXT_PUBLIC_API_KEY` es visible en el navegador
+> Next incrusta toda variable `NEXT_PUBLIC_` en el bundle: cualquiera que abra
+> devtools la ve. Es aceptable mientras el frontend corra en tu propia máquina
+> contra un backend en loopback, que es el caso hoy. **Si este frontend algún día
+> se publica en Vercel, esa clave deja de ser un secreto** y hace falta otra cosa
+> — un backend-for-frontend que la guarde del lado del servidor, o login de
+> usuario con sesión.
+
+> [!note] Qué NO resuelve esto
+> La clave viaja en texto plano si no hay HTTPS. Es suficiente en loopback o por
+> túnel SSH; para exponer la API a internet hace falta TLS por delante.
+
 ### Cargar las credenciales al desplegar (VPS)
 
 El `.env` **no se commitea nunca** — está en `.gitignore` y `git ls-files
@@ -213,6 +274,59 @@ git status --porcelain | grep '\.env$'
 > token con `@BotFather` es inmediato; reescribir el historial de git no
 > "desfiltra" nada que ya se haya publicado.
 
+### Bitácora espejo en Google Sheets (Fase 6, opcional)
+
+Espeja cada operación **cerrada** a la hoja `Trading_Log_IOL`, para poder mirar
+los números desde el celular sin abrir la app. La app sigue siendo la fuente de
+verdad: la hoja es solo de escritura.
+
+> [!note] Es opcional de verdad
+> Sin configurar, el resto del sistema funciona igual. El botón "Sincronizar con
+> Sheets" del simulador aparece deshabilitado y explica qué falta.
+
+```mermaid
+flowchart LR
+    T[(trades cerrados<br/>sincronizado_sheets=false)] --> B[Botón<br/>Sincronizar]
+    B --> API[POST /sync/sheets]
+    API --> CALC[comisiones reales<br/>calculations.py]
+    CALC --> H[["Trading_Log_IOL<br/>columnas A-K"]]
+    API --> M[marca sincronizado_sheets<br/>DESPUÉS de escribir]
+```
+
+Pasos:
+
+```bash
+# 1. Crear la cuenta de servicio (Tarea 0.4) en console.cloud.google.com:
+#    proyecto nuevo -> habilitar "Google Sheets API" y "Google Drive API"
+#    -> Credenciales -> Cuenta de servicio -> Claves -> Crear clave JSON.
+
+# 2. Guardar el JSON FUERA del repo y dejarlo legible solo por tu usuario.
+mv ~/Descargas/*.json ~/.config/tradingbot/credenciales_google.json
+chmod 600 ~/.config/tradingbot/credenciales_google.json
+
+# 3. Apuntar el backend al archivo (en backend/.env).
+GOOGLE_CREDENTIALS_PATH=/home/ubuntu/.config/tradingbot/credenciales_google.json
+SHEETS_NOMBRE_HOJA=Trading_Log_IOL
+
+# 4. Crear la hoja en Google Sheets con ese nombre exacto y COMPARTIRLA como
+#    Editor con el client_email que figura dentro del JSON
+#    (ej. sheets-bot@tradingbotlogger.iam.gserviceaccount.com).
+
+# 5. Comprobar que el backend la ve.
+curl -s http://127.0.0.1:8123/sync/sheets      # -> {"configurado":true,...}
+```
+
+> [!warning] El JSON de la cuenta de servicio es una credencial
+> `.gitignore` ya bloquea `credenciales_google.json` y `*credentials*.json`, pero
+> el lugar correcto no es el repo. Si se filtra, se revoca la clave desde Google
+> Cloud Console (Cuenta de servicio → Claves → borrar) y se genera otra.
+
+> [!note] Las comisiones NO son el 0,6% del manual
+> El manual hardcodea 0,6% por tramo; la tasa real del Excel es **0,7018%**
+> (0,5% + 0,08%, +21% IVA). La hoja recibe lo que calcula `calculations.py`, con
+> las tasas que tengas cargadas en `/config` — así la bitácora nunca contradice al
+> dashboard.
+
 ### Correr 24/7 en el VPS (systemd)
 
 Los dos servicios viven en [`deploy/`](./deploy) y están pensados para que el
@@ -243,21 +357,40 @@ flowchart TD
 
 #### Antes de instalar
 
+> [!warning] Con menos de 2 GB de RAM hace falta swap — si no, FinBERT mata al scanner
+> `transformers` + `torch` pesan ~2,5 GB en disco y FinBERT necesita cerca de 1 GB
+> de RAM para inferir. En el VPS de 1 GB donde corre esto hoy, el scanner queda en
+> ~460 MB residentes y **usa ~1 GB de swap**: sin swap el kernel lo mata (OOM) a
+> mitad de ciclo y systemd lo reinicia en loop. Crear 2 GB de swap **antes** de
+> levantar los servicios:
+> ```bash
+> sudo fallocate -l 2G /swapfile
+> sudo chmod 600 /swapfile
+> sudo mkswap /swapfile && sudo swapon /swapfile
+> # Que sobreviva al reboot:
+> echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+> swapon --show      # tiene que listar /swapfile con 2G
+> ```
+> La alternativa, si no querés swap, es sacar `transformers` y `torch` de
+> `requirements.txt`: `risk_filters.py` degrada solo y sigue aplicando el veto por
+> palabras críticas, pero perdés el score de sentimiento (queda en 0.0).
+
 > [!warning] El `.env` tiene que existir en el servidor
 > Las dos units usan `EnvironmentFile=`, y systemd **falla el arranque** si el
 > archivo no existe. Completar primero los 6 pasos de
 > ["Cargar las credenciales al desplegar (VPS)"](#cargar-las-credenciales-al-desplegar-vps).
 
 > [!warning] La API escucha en `127.0.0.1`, no en `0.0.0.0` — a propósito
-> `app/main.py` no tiene autenticación de ningún tipo y su CORS es
-> `allow_origins=["*"]`. Publicada en internet, cualquiera podría leer
-> `/iol/saldo` (saldo y tenencia reales de la cuenta comitente) y cargar o borrar
-> operaciones. Con `127.0.0.1` solo se llega desde el propio VPS.
+> La API **ya pide clave** (`X-API-Key`, ver [Autenticación](#autenticación-de-la-api)),
+> pero el bind sigue en loopback: son dos capas distintas y conviene tener las dos.
+> `/iol/saldo` devuelve el saldo y la tenencia reales de la cuenta comitente, y
+> `/trades` permite crear y borrar operaciones.
 > Para consumirla desde afuera (por ejemplo un frontend en Vercel) **no alcanza
-> con cambiar el bind**: hace falta un reverse proxy con TLS *y* alguna
-> autenticación delante. Mientras eso no exista, lo seguro es un túnel SSH:
-> `ssh -L 8123:127.0.0.1:8123 usuario@vps` y apuntar `NEXT_PUBLIC_API_URL` a
-> `http://127.0.0.1:8123` en la máquina local.
+> con cambiar el bind ni con la API key**: falta un reverse proxy con TLS, porque
+> sin HTTPS la clave viaja en texto plano en cada request. Mientras eso no exista,
+> lo seguro es un túnel SSH:
+> `ssh -L 8123:127.0.0.1:8123 ubuntu@161.153.207.188` y apuntar
+> `NEXT_PUBLIC_API_URL` a `http://127.0.0.1:8123` en la máquina local.
 
 #### Instalar y habilitar
 
@@ -339,8 +472,12 @@ pytest -m "not network"    # sin pegarle a Yahoo Finance / SEC / Google News
 
 ## Endpoints de la API
 
+> [!note] Todas piden `X-API-Key`
+> Salvo `/health` y la documentación. Ver [Autenticación](#autenticación-de-la-api).
+
 | Método | Ruta | Qué devuelve |
 |---|---|---|
+| `GET` | `/health` | Estado del servicio y si la auth está activa (**pública**) |
 | `GET` | `/senales` | CEDEARs: 7 filtros técnicos + RSI de sobreventa, cada candidato con su `origen` |
 | `GET` | `/senales/bonos` | Renta fija: precio **real en pesos** de BYMA, vía IOL |
 | `GET` | `/senales/smart-money` | Consenso institucional 13F de 5 fondos grandes |
@@ -349,6 +486,8 @@ pytest -m "not network"    # sin pegarle a Yahoo Finance / SEC / Google News
 | `GET` | `/dashboard` | Métricas de paper trading, con desglose por estrategia |
 | `GET` | `/riesgo/vix` | Estado del circuit breaker de VIX |
 | `POST` | `/notificaciones/test` | Manda un mensaje de prueba a Telegram |
+| `GET` | `/sync/sheets` | Si Google Sheets está configurado y cuántas operaciones faltan subir |
+| `POST` | `/sync/sheets` | Espeja a `Trading_Log_IOL` las operaciones cerradas pendientes |
 
 > [!warning] Dos fuentes de precio, y no son intercambiables
 > `/senales` (CEDEARs) usa **yfinance**, que devuelve la acción subyacente en
@@ -451,7 +590,7 @@ calculados no se guardan en la base: se derivan al vuelo desde `calculations.py`
 | No hace | Por qué | Se desbloquea con |
 |---|---|---|
 | Ejecutar órdenes | Fase 11, deliberadamente no construida | Validación previa (Tarea 10.4) |
-| Correr 24/7 en un servidor | El scanner corre solo y las units systemd ya están en `deploy/` | Instalarlas en el VPS (Tarea 10.3) |
+| Correr 24/7 en un servidor | ✅ Hecho — corre en el VPS bajo systemd, verificado tras un reboot | — |
 
 Hoy es **100% papel**: vos cargás, vos cerrás, el sistema calcula y opina.
 
@@ -483,7 +622,8 @@ con la evidencia de cómo se probó, en `PROGRESS.md`.
 | 3 | **Filtro de noticias y riesgo** | ✅ | Circuit breaker de VIX + FinBERT local, como capa de veto antes de sugerir una compra. |
 | 3b | **Consenso institucional (13F)** | ✅ | Segunda estrategia, independiente del swing técnico y con su propio cupo de capital: sigue qué compraron 5 fondos grandes en SEC EDGAR y exige que coincidan al menos dos. |
 | 4 | **Conectar IOL en modo lectura** | ✅ | Saldo y tenencia real de la cuenta comitente, dólar CCL y cotizaciones reales en pesos de BYMA. El login contra IOL está verificado. Habilitó además las señales de bonos (9.4), que necesitaban precio en Contado Inmediato. |
-| 5 | **Alertas y escaneo 24/7** | 🟡 | Telegram ya avisa cierres, señales nuevas y el reporte semanal, y `scanner_job.py` escanea solo sin que nadie abra la app. Las units systemd están en `deploy/` ([cómo instalarlas](#correr-247-en-el-vps-systemd)). **Falta:** dejarlas corriendo en el VPS y el período de validación (Tarea 10.4 👤). |
+| 5 | **Alertas y escaneo 24/7** | ✅ | Telegram avisa cierres, señales nuevas y el reporte semanal. `scanner_job.py` corre **24/7 en el VPS** bajo systemd ([cómo instalarlo](#correr-247-en-el-vps-systemd)), verificado tras un reinicio real del servidor. Lo que sigue no es código: el período de validación de 3-4 semanas (Tarea 10.4 👤). |
+| 5b | **Bitácora en Google Sheets** | 🟡 | Opcional. Las operaciones cerradas se espejan a la hoja `Trading_Log_IOL` con un botón en el simulador, para mirarlas desde el celular. Código listo y probado; **falta** la cuenta de servicio de Google (Tarea 0.4 👤) para hacer la primera sincronización real. |
 | 6 | **Ejecución automática de órdenes** | ⛔ | Recién después de varias semanas de paper trading con esperanza matemática positiva. Implica manejar plata real: logs auditables y límites de riesgo estrictos (stop-loss, tamaño de posición) desde el día uno. |
 
 ```mermaid

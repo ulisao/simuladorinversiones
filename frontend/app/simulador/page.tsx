@@ -7,6 +7,7 @@ import type { Trade } from "@/lib/types";
 import { formatMoney, formatPct } from "@/lib/format";
 import NewTradeForm, { type PrefillTrade } from "@/components/NewTradeForm";
 import CloseTradeRow from "@/components/CloseTradeRow";
+import SyncSheetsButton from "@/components/SyncSheetsButton";
 
 /**
  * La página de Señales navega acá con ?ticker=&precio=&senal= para prellenar el
@@ -71,7 +72,10 @@ function SimuladorContenido() {
             neta de comisiones.
           </p>
         </div>
-        <NewTradeForm onCreated={reload} prefill={prefill} />
+        <div className="flex flex-wrap items-start gap-3">
+          <SyncSheetsButton onSynced={reload} />
+          <NewTradeForm onCreated={reload} prefill={prefill} />
+        </div>
       </div>
 
       <div className="overflow-x-auto rounded-lg border border-neutral-200 dark:border-neutral-800">
@@ -130,6 +134,14 @@ function SimuladorContenido() {
                       {t.estado_posicion}
                     </span>
                     <span className="text-neutral-400">{t.senal}</span>
+                    {t.estado_posicion === "CERRADA" && t.sincronizado_sheets && (
+                      <span
+                        title="Espejada en Google Sheets"
+                        className="ml-1 text-xs text-emerald-600 dark:text-emerald-400"
+                      >
+                        ✓ Sheets
+                      </span>
+                    )}
                   </td>
                   <td className="px-3 py-2 text-right">
                     <div className="flex justify-end gap-2">

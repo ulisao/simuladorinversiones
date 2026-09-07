@@ -54,3 +54,10 @@ frontend/out/
 .DS_Store
 Thumbs.db
 backend/data/
+
+# El .env.local del frontend llegó a estar versionado por error (commit `base`).
+# Trae NEXT_PUBLIC_API_KEY, que es una credencial. La plantilla sin valores es
+# frontend/.env.local.example.
+frontend/.env.local
+# Artefacto de build de TypeScript, no va al repo.
+frontend/tsconfig.tsbuildinfo

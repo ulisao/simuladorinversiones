@@ -57,4 +57,12 @@ def migrar(engine: Engine) -> List[str]:
     ):
         aplicadas.append("trades.estrategia")
 
+    # Tarea 6.2: marca de sincronización a Google Sheets. Las operaciones que ya
+    # estaban cargadas arrancan en 0 (no sincronizadas): la hoja está vacía la
+    # primera vez, así que corresponde que el primer sync las suba todas.
+    if _agregar_columna(
+        engine, "trades", "sincronizado_sheets", "BOOLEAN NOT NULL DEFAULT 0"
+    ):
+        aplicadas.append("trades.sincronizado_sheets")
+
     return aplicadas

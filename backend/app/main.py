@@ -6,7 +6,7 @@ from sqlalchemy.orm import Session
 
 from . import models, schemas, crud
 from . import config, market_data, migrations, notifications, risk_filters, signals
-from . import bond_signals, broker_iol, edgar_13f, wallstreet_tracker
+from . import auth, bond_signals, broker_iol, edgar_13f, sheets_sync, wallstreet_tracker
 from .database import Base, engine, get_db
 from .calculations import BrokerRates
 from .market_data import MarketDataError
@@ -25,12 +25,20 @@ app = FastAPI(
         "rinde de verdad antes de arriesgar dinero real."
     ),
     version="0.1.0",
+    # Dependencia global: protege toda ruta existente y futura sin tener que
+    # acordarse de decorar cada endpoint nuevo. Las excepciones están en
+    # `auth.RUTAS_PUBLICAS` (/health y la documentación).
+    dependencies=[Depends(auth.verificar_api_key)],
 )
 
-# En desarrollo permitimos cualquier origen; restringir en producción al dominio del frontend.
+auth.advertir_al_arrancar()
+
+# Lista blanca de orígenes (config.CORS_ORIGINS, por default el frontend local).
+# Antes era "*": con una API que expone el saldo real de la cuenta, dejar que
+# cualquier página del navegador le hable no tiene sentido.
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=config.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
@@ -39,7 +47,12 @@ app.add_middleware(
 
 @app.get("/health")
 def health():
-    return {"status": "ok"}
+    """Sonda pública: no pide clave, para que un monitor externo no la necesite.
+
+    `auth` dice si la protección está activa y, si algo falta, qué falta — nunca
+    la clave en sí.
+    """
+    return {"status": "ok", "auth": auth.estado()}
 
 
 # ---------- Configuración de broker ----------
@@ -188,6 +201,28 @@ def probar_notificacion():
     motivo viaja en el cuerpo (`enviado=False`).
     """
     return notifications.send_telegram(notifications.MENSAJE_DE_PRUEBA, parse_mode="HTML")
+
+
+# ---------- Google Sheets (Fase 6, bitácora espejo opcional) ----------
+
+@app.get("/sync/sheets", response_model=schemas.EstadoSheetsOut)
+def estado_sheets(db: Session = Depends(get_db)):
+    """Si Sheets está configurado y cuántas operaciones cerradas faltan subir.
+
+    No toca la red: solo mira el entorno y la base.
+    """
+    return sheets_sync.estado(db)
+
+
+@app.post("/sync/sheets", response_model=schemas.SyncSheetsOut)
+def sincronizar_sheets(db: Session = Depends(get_db)):
+    """Espeja a `Trading_Log_IOL` las operaciones cerradas no sincronizadas (Tarea 6.2).
+
+    Siempre responde 200: si falta la cuenta de servicio o Google rechaza la
+    escritura, el motivo viaja en el cuerpo con `sincronizadas=0`. Un segundo
+    click no duplica filas — las ya subidas quedan marcadas en la base.
+    """
+    return sheets_sync.sincronizar(db)
 
 
 # ---------- Cuenta real de IOL (Fase 8, solo lectura) ----------

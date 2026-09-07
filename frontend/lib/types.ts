@@ -12,6 +12,8 @@ export interface Trade {
   fecha_venta: string | null;
   precio_salida: number | null;
   senal: string | null;
+  /** Si ya se espejó a Google Sheets (Tarea 6.2). Solo aplica a las cerradas. */
+  sincronizado_sheets: boolean;
 
   capital_bruto_invertido: number;
   comision_compra: number;
@@ -283,4 +285,18 @@ export interface SenalesBonos {
   iol: EstadoIOL;
   candidatos: SenalBono[];
   descartados: BonoDescartado[];
+}
+
+/** Resultado de POST /sync/sheets (Tarea 6.2). */
+export interface SyncSheets {
+  sincronizadas: number;
+  pendientes: number;
+  motivo: string;
+}
+
+/** Resultado de GET /sync/sheets: si está configurado y cuánto falta subir. */
+export interface EstadoSheets {
+  configurado: boolean;
+  pendientes: number;
+  motivo: string;
 }

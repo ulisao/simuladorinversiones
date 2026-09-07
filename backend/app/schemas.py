@@ -58,6 +58,7 @@ class TradeOut(BaseModel):
     fecha_venta: Optional[date]
     precio_salida: Optional[float]
     senal: Optional[str]
+    sincronizado_sheets: bool = False
 
     # Campos calculados (no se guardan, se derivan de calculations.py)
     capital_bruto_invertido: float
@@ -186,6 +187,27 @@ class SenalesOut(BaseModel):
 
 
 # ---------- Notificaciones (Fase 7) ----------
+
+
+class SyncSheetsOut(BaseModel):
+    """Resultado de un intento de sincronización a Google Sheets (Tarea 6.2).
+
+    Igual que `NotificacionOut`: `sheets_sync` nunca lanza, así que un fallo
+    viaja acá con HTTP 200 y el motivo en castellano. `pendientes` es lo que
+    quedó sin subir — 0 cuando salió todo bien.
+    """
+
+    sincronizadas: int
+    pendientes: int
+    motivo: str = ""
+
+
+class EstadoSheetsOut(BaseModel):
+    """Si Sheets está configurado y cuántas operaciones esperan sincronización."""
+
+    configurado: bool
+    pendientes: int
+    motivo: str = ""
 
 
 class NotificacionOut(BaseModel):

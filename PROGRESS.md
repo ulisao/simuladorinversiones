@@ -2081,6 +2081,13 @@ Las 10 señales llegaron a Telegram. Suite final: **401 passed**.
 
 ## Estado real de las tareas — auditado el 2026-09-07 (2)
 
+> [!warning] Esta auditoría quedó vieja el mismo día
+> Lista la 10.3 como bloqueada por el VPS. Un rato después el VPS estuvo listo y
+> se completaron **10.1 (verificada en vivo), 10.2 y 10.3**. El estado al día de
+> hoy está en las tres entradas siguientes; de las 37 tareas 🤖 quedan
+> **34 hechas y 3 pendientes** — 11.1, 11.2 y 11.3, que esperan la 10.4 👤, y esa
+> no es código sino 3-4 semanas de validación.
+
 De las **37 tareas 🤖** del plan: **33 hechas, 4 pendientes**. Ninguna de las
 cuatro que faltan se puede empezar sin algo que tiene que aportar una persona.
 
@@ -2127,7 +2134,7 @@ flowchart LR
 | 10 — Automatización | 10.1 (falta 10.3) | ✅ |
 | 12 — Producción | 12.2 | ✅ |
 
-*(La Fase 6 — Google Sheets — se descartó el 2026-09-07.)*
+*(La Fase 6 — Google Sheets — se había descartado el 2026-09-07, pero volvió al plan y se implementó el mismo día: ver la entrada de las Tareas 6.1 y 6.2.)*
 
 ### Estado de las credenciales
 
@@ -2374,13 +2381,11 @@ tests/test_deploy_units.py::test_el_scanner_corre_el_job_correcto PASSED [100%]
 
 ### Pendiente / notas
 
-> [!warning] Las units NO se instalaron todavía — el criterio de aceptación sigue abierto
-> La Tarea 10.3 pide `systemctl status` en `active (running)` **después de un
-> reinicio del servidor**, y eso solo se puede comprobar en el VPS. Los tests de
-> arriba validan que los archivos son correctos, no que el servicio levanta:
-> `systemd-analyze verify` no existe en Windows. Falta correr los 5 pasos de
-> instalación del README en el servidor y pegar acá la salida real del
-> `systemctl status`.
+> [!done] Instaladas y verificadas el mismo día
+> Cuando se escribió esto las units todavía no se habían instalado. Se instalaron
+> en el VPS un rato después, con el test de reboot incluido: ver la entrada
+> **"2026-09-07 (5) — Tareas 10.2 y 10.3 — Despliegue real en el VPS"** al final
+> del archivo.
 
 > [!note] Qué ajustar si el layout del VPS es otro
 > Las units asumen usuario `tradingbot` y ruta
@@ -2388,7 +2393,516 @@ tests/test_deploy_units.py::test_el_scanner_corre_el_job_correcto PASSED [100%]
 > usuario y ruta de una sola vez, antes de copiarlas a `/etc/systemd/system/`.
 
 > [!todo] Próximo paso
-> Tarea 10.2 👤 (terminar de preparar el VPS: zona horaria, NTP, clonar el repo,
-> crear el `.env`) e instalar estas units. Con eso arranca el período de
-> validación de la Tarea 10.4 👤 — 3 a 4 semanas en modo solo sugerir, con
-> `MODO_FANTASMA=true`.
+> Hecho el mismo día: ver la entrada del despliegue al final del archivo.
+
+---
+
+## 2026-09-07 (5) — Tareas 10.2 y 10.3 — Despliegue real en el VPS
+
+> [!summary] Qué se hizo
+> El bot quedó **corriendo 24/7 en el VPS**. Se completó lo que faltaba de la
+> preparación del servidor (Tarea 10.2), se instalaron las dos units systemd
+> (Tarea 10.3) y se verificó el criterio de aceptación con un reboot real: los dos
+> servicios levantaron solos. Al momento de escribir esto llevan **3 h 31 min
+> corriendo sin un solo error**, con 7 ciclos de escaneo sobre una rueda BYMA
+> abierta de verdad.
+
+### El servidor
+
+| Dato | Valor |
+|---|---|
+| Host | `bot-mati` — Ubuntu 22.04.5 LTS |
+| Acceso | `ssh ubuntu@161.153.207.188` |
+| Ruta del repo | `/home/ubuntu/simuladorinversiones` |
+| Python | 3.10.12 del sistema · **3.13.15** en el venv |
+| RAM / disco | 956 MB · 45 GB (27% usado) |
+| Zona horaria | `America/Argentina/Buenos_Aires`, NTP activo y sincronizado |
+
+### Estado de la Tarea 10.2, punto por punto
+
+| Paso que pide la tarea | Estado |
+|---|---|
+| `apt update && apt upgrade` | ✅ ya estaba hecho |
+| Python 3.10+, `venv`, `git` | ✅ ya estaba (venv con Python 3.13.15) |
+| Node.js | ⏭️ no se instaló — el frontend no corre en el VPS (ver nota) |
+| Reloj NTP + zona horaria ART | ✅ ya estaba (`System clock synchronized: yes`) |
+| Clonar el repo | ✅ ya estaba, en commit `ed74ead` |
+| **Swap** (no estaba en la tarea) | ✅ **agregado — era imprescindible, ver abajo** |
+| **Crear el `.env`** | ✅ copiado por `scp`, `chmod 600` |
+
+### El problema que casi rompe todo: 956 MB de RAM y cero swap
+
+> [!warning] Sin swap, FinBERT hace que el kernel mate al scanner
+> `requirements.txt` ya avisaba que `transformers` + `torch` necesitan ~1 GB de
+> RAM y que "un VPS free tier de 512 MB - 1 GB NO alcanza". El VPS tiene 956 MB y
+> **no tenía swap**. Con los dos servicios arriba el scanner queda en ~460 MB
+> residentes y el sistema usa **1,1 GB de swap**: sin ese colchón el OOM killer lo
+> mataba a mitad de ciclo y systemd lo reiniciaba en loop, para siempre.
+> Se creó un swapfile de 2 GB y se persistió en `/etc/fstab`:
+>
+> ```bash
+> sudo fallocate -l 2G /swapfile && sudo chmod 600 /swapfile
+> sudo mkswap /swapfile && sudo swapon /swapfile
+> echo '/swapfile none swap sw 0 0' | sudo tee -a /etc/fstab
+> ```
+>
+> Quedó documentado en el README, en "Antes de instalar".
+
+```mermaid
+flowchart LR
+    subgraph ANTES["Sin swap · 956 MB"]
+        A1[scanner arranca] --> A2[FinBERT pide ~1 GB]
+        A2 --> A3[OOM killer]
+        A3 --> A4[systemd reinicia]
+        A4 --> A1
+    end
+    subgraph AHORA["Con 2 GB de swap"]
+        B1[scanner arranca] --> B2[460 MB residentes<br/>+ 1,1 GB swap]
+        B2 --> B3[7 ciclos, 0 reinicios]
+    end
+    classDef mal fill:#7f1d1d,stroke:#ef4444,color:#fff
+    classDef bien fill:#065f46,stroke:#10b981,color:#fff
+    class A3,A4 mal
+    class B3 bien
+```
+
+### Cómo se probó
+
+**1. La suite completa corriendo en el propio VPS:**
+
+```
+$ cd ~/simuladorinversiones/backend && ./venv/bin/python -m pytest -m "not network" -q
+401 passed, 8 deselected, 1 warning in 8.49s
+```
+
+*(401 y no 416: el repo del VPS está en `ed74ead`, todavía sin los 15 tests de
+`test_deploy_units.py` que se escribieron hoy.)*
+
+**2. `systemd-analyze verify` sobre las units instaladas** — esto no se podía
+correr desde Windows:
+
+```
+$ systemd-analyze verify /etc/systemd/system/tradingbot-api.service /etc/systemd/system/tradingbot-scanner.service
+  (sin errores en nuestras units)
+```
+
+**3. Credenciales cargadas desde el `.env` del servidor, sin imprimirlas:**
+
+```
+  .env: permisos 600, dueño ubuntu:ubuntu
+  IOL: True
+  Telegram: True
+  MODO_FANTASMA: True
+```
+
+**4. Los dos servicios arriba, y la API solo en loopback:**
+
+```
+  /dashboard              -> HTTP 200
+  /riesgo/vix             -> HTTP 200
+  http://10.0.0.221:8123/ -> 000   (rechazado desde la IP privada, correcto)
+```
+
+**5. El criterio de aceptación — `systemctl status` DESPUÉS de un reboot real:**
+
+```
+$ sudo systemctl reboot
+... (el VPS vuelve) ...
+
+  tradingbot-api         enabled=enabled active=active
+  tradingbot-scanner     enabled=enabled active=active
+
+● tradingbot-api.service - Simulador Inversiones IA - API FastAPI
+     Active: active (running) since Mon 2026-09-07 10:09:52 -03; 3h 31min ago
+   Main PID: 752 (uvicorn)
+● tradingbot-scanner.service - Simulador Inversiones IA - Scanner de senales (modo solo sugerir)
+     Active: active (running) since Mon 2026-09-07 10:09:53 -03; 3h 31min ago
+   Main PID: 795 (python)
+     Memory: 461.2M
+```
+
+**6. Ciclos de escaneo reales, con la rueda BYMA abierta:**
+
+```
+12:23:37  INFO    Escaneo CEDEARs: 1 candidato(s), 0 nuevo(s) notificado(s), 9 descartado(s)
+12:24:10  INFO    Escaneo bonos:   6 candidato(s), 0 nuevo(s) notificado(s), 3 descartado(s)
+12:34:53  INFO    Escaneo CEDEARs: 1 candidato(s), 0 nuevo(s) notificado(s), 9 descartado(s)
+12:35:25  INFO    Escaneo bonos:   7 candidato(s), 1 nuevo(s) notificado(s), 2 descartado(s)
+12:46:29  INFO    Escaneo CEDEARs: 1 candidato(s), 0 nuevo(s) notificado(s), 9 descartado(s)
+12:47:00  INFO    Escaneo bonos:   7 candidato(s), 0 nuevo(s) notificado(s), 2 descartado(s)
+12:57:54  INFO    Escaneo CEDEARs: 1 candidato(s), 0 nuevo(s) notificado(s), 9 descartado(s)
+12:58:23  INFO    Escaneo bonos:   6 candidato(s), 0 nuevo(s) notificado(s), 3 descartado(s)
+13:08:57  INFO    Escaneo CEDEARs: 1 candidato(s), 0 nuevo(s) notificado(s), 9 descartado(s)
+13:09:26  INFO    Escaneo bonos:   6 candidato(s), 0 nuevo(s) notificado(s), 3 descartado(s)
+13:20:42  INFO    Escaneo CEDEARs: 1 candidato(s), 0 nuevo(s) notificado(s), 9 descartado(s)
+13:21:10  INFO    Escaneo bonos:   6 candidato(s), 0 nuevo(s) notificado(s), 3 descartado(s)
+13:32:00  INFO    Escaneo CEDEARs: 1 candidato(s), 0 nuevo(s) notificado(s), 9 descartado(s)
+13:32:34  INFO    Escaneo bonos:   6 candidato(s), 0 nuevo(s) notificado(s), 3 descartado(s)
+```
+
+**7. Salud del proceso tras 3 h 31 min:**
+
+```
+  journalctl -p warning (scanner) -> -- No entries --
+  journalctl -p warning (api)     -> -- No entries --
+  OOM killer                      -> sin eventos
+  api NRestarts=0 / scanner NRestarts=0
+```
+
+### Dos cosas que estas 3 horas dejaron claras
+
+> [!done] La deduplicación funciona como se esperaba
+> Después del primer aviso, los ciclos siguientes reportan **"0 nuevo(s)
+> notificado(s)"** aunque el candidato siga ahí. En 3 h 31 min mandó **un solo
+> mensaje nuevo** (un bono, a las 12:35), no 14. Era justo el riesgo de spam que
+> la Tarea 10.1 quería evitar.
+
+> [!done] Los filtros de bonos SÍ descartan — la sospecha del domingo se cae
+> La entrada anterior avisaba que en la corrida del domingo los bonos habían dado
+> "9 candidatos, 0 descartados", y que un filtro que nunca descarta no está
+> filtrando. Con la rueda abierta y precios reales descarta **2 o 3 de 9 en cada
+> ciclo**. El resultado del domingo era el artefacto esperable de correr con
+> precios congelados del viernes, no un filtro roto.
+
+### Pendiente / notas
+
+> [!warning] El repo del VPS está atrasado respecto de esta máquina
+> El servidor corre el commit `ed74ead`. Las units instaladas se copiaron por
+> `scp`, no salieron de un `git pull`. Cuando se commitee el trabajo de hoy hay
+> que hacer `git pull` en el VPS y `sudo systemctl restart tradingbot-api
+> tradingbot-scanner` para que corra el código nuevo.
+
+> [!note] Las units del repo apuntan a `/opt/tradingbot`, las del VPS a `/home/ubuntu`
+> Los archivos versionados en `deploy/` conservan el default documentado
+> (`/opt/tradingbot/simuladorinversiones`, usuario `tradingbot`). En el servidor se
+> aplicó el `sed` del README para dejarlos en `/home/ubuntu/simuladorinversiones`
+> con usuario `ubuntu`. Si algún día se reinstalan desde el repo, hay que volver a
+> correr ese `sed`.
+
+> [!note] Node.js no se instaló en el VPS
+> La Tarea 10.2 lo pide "si van a servir el frontend ahí también", y la propia
+> tarea recomienda backend en VPS + frontend en Vercel. Hoy el frontend no está
+> desplegado en ningún lado: se usa en local contra la API por túnel SSH. Si más
+> adelante va a Vercel, hay que resolver antes el problema de que la API no tiene
+> autenticación (ver el warning del README).
+
+> [!todo] Próximo paso: Tarea 10.4 👤 — el período de validación
+> Es lo único que queda de la Fase 10, y no es código: son **3 a 4 semanas** con
+> el sistema corriendo así, `MODO_FANTASMA=true`, cargando a mano en `/simulador`
+> cada señal que llegue por Telegram y siguiéndola hasta que cierre. El checklist
+> de qué revisar mientras tanto (401 repetidos, precisión de las entradas,
+> stop-loss que no dispara, tamaño de posición, dólar CCL) está en la tarea.
+> Recién con el veredicto del Dashboard al final de ese período tiene sentido
+> mirar la Fase 11.
+
+---
+
+## 2026-09-07 (6) — Tareas 6.1 y 6.2 — Google Sheets como bitácora espejo
+
+> [!summary] Qué se hizo
+> La Fase 6 volvió al plan (estaba descartada desde el 2026-09-07) y se
+> implementó completa: módulo de sincronización, endpoints y botón en el
+> simulador. Las operaciones **cerradas** se espejan a la hoja `Trading_Log_IOL`
+> con la estructura de columnas A-K del manual. La app sigue siendo la fuente de
+> verdad; la hoja existe para mirar los números desde el celular.
+
+### Por qué volvió al plan
+
+> [!note] Detectado revisando un diff, no pedido de la nada
+> `tareas-desarrollo.md` había vuelto a una versión previa al 2026-09-07: reaparecieron
+> la Fase 6 y la Tarea 0.4, y **la Tarea 12.1 volvió a decir
+> `EJECUCION_REAL_HABILITADA=true`**, una variable que el código ya no lee
+> ([config.py](backend/app/config.py) la detecta y avisa que está obsoleta; el kill
+> switch real es `MODO_FANTASMA`). Se consultó y la decisión fue: la 12.1 era una
+> regresión y se corrigió, pero **Sheets vuelve al plan a propósito** y se
+> implementa ya.
+
+### Qué se construyó
+
+| Tarea | Entregable | Dónde |
+|---|---|---|
+| 6.1 | Módulo de sincronización, lee de la base propia | `backend/app/sheets_sync.py` |
+| 6.1 | `gspread` + `google-auth` | `backend/requirements.txt` |
+| 6.2 | `GET /sync/sheets` (estado) y `POST /sync/sheets` (sincronizar) | `backend/app/main.py` |
+| 6.2 | Campo `Trade.sincronizado_sheets` + migración | `backend/app/models.py`, `app/migrations.py` |
+| 6.2 | Botón "Sincronizar con Sheets" | `frontend/components/SyncSheetsButton.tsx` |
+| — | 18 tests | `backend/tests/test_sheets_sync.py` |
+
+```mermaid
+flowchart TD
+    BTN["Botón Sincronizar<br/>(simulador)"] --> EP[POST /sync/sheets]
+    EP --> SS[sheets_sync.sincronizar]
+    SS --> CFG{¿hay credenciales_google.json?}
+    CFG -- no --> MOT[/"sincronizadas=0<br/>+ motivo en castellano"/]
+    CFG -- sí --> Q[(trades cerrados<br/>sincronizado_sheets=false)]
+    Q --> CALC[calculations.compute_trade<br/>comisiones reales]
+    CALC --> ROWS[append_rows en lote]
+    ROWS -- error --> RETRY[/"no marca nada<br/>se reintenta"/]
+    ROWS -- ok --> MARK[marcar sincronizado_sheets]
+    MARK --> COMMIT[(commit)]
+    ROWS -.-> GS{{Google Sheets API}}
+```
+
+**Archivos tocados:** `backend/app/sheets_sync.py` (nuevo),
+`backend/tests/test_sheets_sync.py` (nuevo),
+`frontend/components/SyncSheetsButton.tsx` (nuevo), `backend/app/models.py`,
+`backend/app/migrations.py`, `backend/app/schemas.py`, `backend/app/main.py`,
+`backend/app/config.py`, `backend/requirements.txt`, `backend/.env.example`,
+`frontend/lib/api.ts`, `frontend/lib/types.ts`, `frontend/app/simulador/page.tsx`,
+`CLAUDE.md`, `README.md`, `tareas-desarrollo.md`.
+
+### Tres desvíos deliberados del manual
+
+| Qué dice el manual | Qué se hizo | Por qué |
+|---|---|---|
+| Comisiones al **0,6%** por tramo, hardcodeadas | `calculations.compute_trade()` | El 0,6% del manual **no coincide con el Excel**: la tasa real es 0,7018% por tramo (0,5% + 0,08%, +21% IVA). `calculations.py` es la única fuente de verdad matemática (CLAUDE.md), y además respeta las tasas que el usuario tenga cargadas en `/config` |
+| `oauth2client.ServiceAccountCredentials` | `google.oauth2.service_account.Credentials` | oauth2client está deprecado desde 2018 (repo archivado) y **gspread 6 ya no lo acepta**: su `authorize()` espera credenciales de `google-auth`. Se probó instalarlo: instala, pero no funciona con gspread 6.2.1 |
+| `registrar_compra` + `registrar_venta`: dos filas por operación | Una fila por operación cerrada | La Tarea 6.1 pide "una fila por operación cerrada" leyendo de la base. Además, dos filas romperían el `CONTAR.SI(...;"CERRADA")` del Dashboard del propio manual, que asume una fila por operación |
+
+> [!warning] El orden de las operaciones importa
+> Se marca `sincronizado_sheets` **después** del `append_rows`, nunca antes. Si se
+> marcara primero y la escritura fallara, esas operaciones no se reintentarían
+> nunca y la hoja quedaría incompleta para siempre. Al revés, el peor caso es una
+> fila repetida si el proceso muere entre la escritura y el commit — recuperable
+> a mano, a diferencia de un dato que no se escribe jamás.
+
+### Cómo se probó
+
+**1. Suite completa (434 tests, 18 nuevos):**
+
+```
+$ ./venv/Scripts/python.exe -m pytest -m "not network" -q
+434 passed, 8 deselected, 75 warnings in 11.42s
+```
+
+**2. Los 18 tests de la Fase 6:**
+
+```
+$ ./venv/Scripts/python.exe -m pytest tests/test_sheets_sync.py -q
+..................                                                       [100%]
+18 passed in 1.02s
+```
+
+Ninguno le pega a la API de Google: la hoja se reemplaza por un doble
+(`HojaFalsa`) que registra lo que recibe. Lo que fijan es lo que puede romper de
+verdad — que las comisiones no sean el 0,6% del manual, que un segundo click no
+duplique, y que un fallo de escritura no marque nada.
+
+**3. Migración y endpoints, contra la base real:**
+
+```
+INFO:app.migrations:Migración: trades.sincronizado_sheets agregada
+GET  /sync/sheets -> 200 {'configurado': False, 'pendientes': 1, 'motivo': 'Google Sheets no configurado: falta GOOGLE_CREDENTIALS_PATH...'}
+POST /sync/sheets -> 200 {'sincronizadas': 0, 'pendientes': 1, 'motivo': 'Google Sheets no configurado: falta GOOGLE_CREDENTIALS_PATH...'}
+trades: 1 | primer trade tiene sincronizado_sheets: True
+```
+
+**4. Typecheck del frontend:**
+
+```
+$ npx tsc --noEmit
+(sin errores, exit 0)
+```
+
+### Pendiente / notas
+
+> [!warning] Falta la Tarea 0.4 👤 — sin eso el botón queda deshabilitado
+> El código está completo y probado, pero **nadie subió todavía una fila real a
+> una hoja real**: hace falta la cuenta de servicio de Google Cloud
+> (`credenciales_google.json`) y compartir la hoja `Trading_Log_IOL` con el
+> `client_email` como Editor. El criterio de aceptación de la 6.1 pide
+> exactamente eso — una operación real espejada — así que **la Fase 6 no está
+> cerrada del todo hasta que se haga esa prueba**. Pasos en la Tarea 0.4 y en el
+> manual, sección 3.
+
+> [!note] Sin credenciales la app funciona igual
+> `sheets_sync` degrada solo: `GET /sync/sheets` devuelve `configurado: false` con
+> el motivo en castellano y el botón se muestra deshabilitado con ese texto en el
+> tooltip. Se eligió deshabilitarlo en vez de esconderlo: si el botón no
+> estuviera, no habría forma de notar que falta configurar algo.
+
+> [!note] Solo se espejan operaciones CERRADAS
+> Es lo que pide la Tarea 6.1 ("una fila por operación cerrada"). Las abiertas no
+> suben: su resultado neto todavía no existe y las columnas G, I y J quedarían
+> vacías. El estado de las abiertas se mira en la app.
+
+> [!todo] Próximo paso
+> Autenticación de la API. Hoy `main.py` no tiene ninguna y su CORS es
+> `allow_origins=["*"]`, que es lo que obliga a tener el backend escuchando solo
+> en loopback en el VPS.
+
+---
+
+## 2026-09-07 (7) — Autenticación de la API (fuera del plan, pedida en sesión)
+
+> [!summary] Qué se hizo
+> La API pasó de **no tener ninguna autenticación** a pedir `X-API-Key` en todas
+> las rutas salvo `/health` y la documentación. Además el CORS dejó de ser `*`.
+> No está en `tareas-desarrollo.md`: salió de revisar el despliegue de la Fase 10,
+> donde la falta de auth era lo que obligaba a dejar el backend encerrado en
+> `127.0.0.1`.
+
+### El problema
+
+`app/main.py` no validaba nada y su CORS era `allow_origins=["*"]`. Cualquiera
+que llegara al puerto 8123 podía:
+
+| Endpoint | Qué habilitaba |
+|---|---|
+| `GET /iol/saldo` | Leer saldo y tenencia **reales** de la cuenta comitente |
+| `POST /trades` | Cargar operaciones falsas y ensuciar el veredicto del dashboard |
+| `DELETE /trades/{id}` | Borrar el historial que justifica pasar (o no) a la Fase 11 |
+| `PUT /broker-config` | Cambiar las comisiones y falsear todos los cálculos |
+
+Lo único que lo tapaba era el bind en loopback — una sola capa, y del tipo que
+se pierde con un `--host 0.0.0.0` puesto sin pensar.
+
+### Qué se construyó
+
+| Pieza | Dónde |
+|---|---|
+| Dependencia de auth + rutas públicas | `backend/app/auth.py` (nuevo) |
+| Registro global + CORS acotado + `/health` con estado | `backend/app/main.py` |
+| `API_KEY`, `API_AUTH_DESHABILITADA`, `CORS_ORIGINS` | `backend/app/config.py` |
+| Header en todas las llamadas + errores legibles | `frontend/lib/api.ts` |
+| 17 tests | `backend/tests/test_auth.py` (nuevo) |
+
+```mermaid
+flowchart TD
+    R[Request] --> P{¿ruta pública?<br/>/health · /docs}
+    P -- sí --> OK[Pasa]
+    P -- no --> O{¿método OPTIONS?}
+    O -- sí --> OK
+    O -- no --> D{¿API_AUTH_DESHABILITADA?}
+    D -- sí --> WARN[Pasa + warning en el log]
+    D -- no --> K{¿hay API_KEY?}
+    K -- no --> E503[503<br/>no configurada]
+    K -- sí --> H{¿compare_digest ok?}
+    H -- no --> E401[401]
+    H -- sí --> OK
+    classDef mal fill:#7f1d1d,stroke:#ef4444,color:#fff
+    class E401,E503 mal
+```
+
+### Decisiones
+
+> [!warning] Falla cerrada, no abierta
+> Sin `API_KEY` la API responde **503 a todo** salvo `/health`, en vez de dejar
+> pasar. Si el default fuera permisivo, un `.env` mal copiado dejaría la API
+> abierta sin que nadie se entere — y el modo inseguro sería el silencioso.
+> Correr sin auth existe, pero hay que pedirlo a mano con
+> `API_AUTH_DESHABILITADA=true`, y el arranque lo grita en el log.
+
+> [!note] Dependencia global, no decorador por endpoint
+> Va en `FastAPI(dependencies=[Depends(auth.verificar_api_key)])`. Con decoradores
+> por endpoint, el primer endpoint que alguien agregue sin acordarse queda
+> abierto. Hay un test (`test_la_proteccion_alcanza_a_toda_ruta_no_publica`) que
+> fija esta propiedad para que nadie la mueva. Quedó anotado en `CLAUDE.md`.
+
+> [!note] `secrets.compare_digest`, no `==`
+> Comparar strings con `==` corta en el primer carácter distinto, y ese tiempo de
+> respuesta filtra cuántos caracteres del prefijo eran correctos. Hay un test que
+> manda la clave menos el último carácter.
+
+> [!note] `/health` queda público
+> Para que un monitor externo o `systemd` puedan sondear el servicio sin que haya
+> que repartirles la credencial. Devuelve el estado y si la auth está activa —
+> nunca la clave. Un test verifica que la clave no aparezca en la respuesta.
+
+> [!note] El 401 no distingue "faltaba" de "estaba mal"
+> Misma respuesta para los dos casos: decir cuál de los dos fue le confirma a
+> quien prueba que el header existe y que vale la pena insistir.
+
+> [!note] `OPTIONS` pasa sin clave
+> El preflight de CORS no manda headers propios. Si se le respondiera 401, el
+> navegador nunca llegaría a mandar el request real con la clave.
+
+### Un efecto colateral: 10 tests existentes se cayeron
+
+> [!warning] La suite pegaba a los endpoints sin clave
+> Al fallar cerrada, los tests de `test_notifications.py` y `test_signals.py`
+> empezaron a recibir 503. Se resolvió con una fixture `autouse` en `conftest.py`
+> que apaga la auth en toda la suite, y que `test_auth.py` vuelve a encender con
+> sus propias fixtures. La alternativa —arrastrar un header en ~40 tests que no
+> están probando auth— ensuciaba mucho para no verificar nada extra.
+
+### Cómo se probó
+
+**1. Suite completa (451 tests, 17 nuevos):**
+
+```
+$ ./venv/Scripts/python.exe -m pytest -m "not network" -q
+451 passed, 8 deselected, 115 warnings in 10.15s
+```
+
+**2. Contra el `.env` real, no contra mocks:**
+
+```
+auth activa: True | API_KEY cargada: True
+GET /health               -> 200 {'activa': True, 'motivo': ''}
+GET /dashboard sin clave  -> 401
+GET /dashboard clave mala -> 401
+GET /dashboard con clave  -> 200
+CORS origins: ['http://localhost:3000', 'http://127.0.0.1:3000']
+```
+
+**3. Typecheck del frontend:**
+
+```
+$ npx tsc --noEmit
+(sin errores, exit 0)
+```
+
+### Hallazgo aparte: `frontend/.env.local` estaba versionado
+
+> [!warning] Encontrado al revisar el `git status`, corregido antes de commitear
+> `frontend/.env.local` venía trackeado desde el commit `base`. Hasta ahora daba
+> igual (solo tenía `NEXT_PUBLIC_API_URL`), pero al escribirle la API key pasó a
+> ser un archivo con una credencial camino al repo. `.gitignore` tenía los
+> patrones `.env.*` y `**/.env.*`, que no sirven de nada sobre un archivo **ya
+> trackeado**.
+>
+> Se corrigió con `git rm --cached frontend/.env.local` (el archivo local queda),
+> una regla explícita en `.gitignore` y una plantilla versionada sin valores en
+> `frontend/.env.local.example`.
+>
+> **Nada se llegó a commitear:** se verificó que la clave no está en el diff, ni
+> en ningún archivo versionado, ni en el historial (`git log -S`). No hace falta
+> rotarla ni reescribir historia.
+
+De paso se desversionó `frontend/tsconfig.tsbuildinfo`, un artefacto de build que
+tampoco tenía por qué estar en el repo.
+
+### Dónde quedó cargada la clave
+
+| Lugar | Estado |
+|---|---|
+| `backend/.env` (esta máquina) | ✅ `API_KEY` generada con `secrets.token_urlsafe(32)` |
+| `frontend/.env.local` | ✅ `NEXT_PUBLIC_API_KEY`, la misma |
+| `backend/.env` del VPS | ✅ agregada, `chmod 600` |
+
+Ninguno de los tres se commitea.
+
+### Pendiente / notas
+
+> [!warning] El VPS todavía corre la API sin auth
+> El servidor está en el commit `ed74ead`: la clave ya está en su `.env`, pero el
+> código que corre no la usa. Recién con `git pull` + `sudo systemctl restart
+> tradingbot-api tradingbot-scanner` queda protegido. El scanner no se ve afectado
+> en ningún caso: llama a las funciones en proceso, no por HTTP.
+
+> [!warning] `NEXT_PUBLIC_API_KEY` es visible en el navegador
+> Next incrusta las variables `NEXT_PUBLIC_` en el bundle. Sirve mientras el
+> frontend corra en la máquina de uno contra loopback. Si alguna vez se publica en
+> Vercel, deja de ser un secreto y hace falta un backend-for-frontend o login de
+> usuario.
+
+> [!note] Esto no habilita exponer la API a internet
+> Sin HTTPS la clave viaja en texto plano. Se decidió en la sesión **seguir en
+> loopback + túnel SSH**; la auth es la segunda capa, no el reemplazo del bind.
+> Para exponerla haría falta un reverse proxy con TLS (Caddy o nginx) y un
+> dominio.
+
+> [!todo] Próximo paso
+> Sigue siendo la Tarea 10.4 👤: 3-4 semanas de validación en modo solo sugerir.
+> Antes conviene pushear y actualizar el VPS.

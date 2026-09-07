@@ -19,7 +19,7 @@ que la IA se adelante a hacer cosas que no le pediste todavía).
 
 **Referencias de spec:** apuntan a los manuales originales que armó tu amigo
 (`Manual_Maestro_Bot_Inversion_IA_Completo.docx`, `Manual_Maestro_Bot_Bonos_Soberanos_Provinciales.docx`,
-`Guia_IOL_Integracion_IA_Comisiones.docx`,
+`Manual_Integracion_Google_Sheets_Trading_Bot.docx`, `Guia_IOL_Integracion_IA_Comisiones.docx`,
 `Guia_Completa_Sistema_Inversion_IA_noticias.docx`, `pasar_ulises_31_2.docx`,
 `Pasar_ulises_31_de_agosto.docx`) más un chat de Gemini que tu amigo pegó el
 6/9 (sin archivo — llamado acá `chat-gemini-6-9` en las tareas que lo citan;
@@ -119,10 +119,18 @@ de prueba con `curl` contra la API de Telegram).
 
 ---
 
-> [!note] Tarea 0.4 (cuenta de servicio de Google) — descartada el 2026-09-07
-> Existía sólo para desbloquear la Fase 6 (Google Sheets), que también se
-> descartó. La numeración de las demás tareas se mantiene para no invalidar
-> las referencias del historial en `PROGRESS.md`.
+### Tarea 0.4 — 👤 Crear cuenta de servicio de Google y hoja de cálculo (opcional)
+**Objetivo:** Tener la cuenta de servicio de Google Cloud y la hoja
+`Trading_Log_IOL` listas, si deciden usar Google Sheets como bitácora
+adicional (Fase 6 — opcional, la app ya cumple ese rol).
+
+**Pasos:** seguir textual `Manual_Integracion_Google_Sheets_Trading_Bot.docx`,
+sección 3 (crear proyecto en Google Cloud Console, habilitar Sheets API y
+Drive API, crear cuenta de servicio, descargar `credenciales_google.json`,
+compartir la hoja con el email de la cuenta de servicio como Editor).
+
+**Resultado esperado:** archivo `credenciales_google.json` descargado (no
+subir al repo) y hoja compartida.
 
 ---
 
@@ -805,12 +813,57 @@ diferenciadas, con datos de prueba en cada una.
 
 ---
 
-# FASE 6 — descartada
+# FASE 6 — Integración con Google Sheets (opcional)
 
-> [!note] Fase 6 (Google Sheets) — descartada el 2026-09-07
-> Se decidió no integrar Google Sheets: la app ya cumple el rol de bitácora
-> que cumplía el Excel original. La numeración de las demás fases se mantiene
-> para no invalidar las referencias del historial en `PROGRESS.md`.
+> Esta fase es opcional: la app ya cumple el rol de bitácora que cumplía el
+> Excel/Sheets original. Solo tiene sentido si tu amigo quiere revisar los
+> números desde el celular en Google Sheets sin abrir la app.
+
+### Tarea 6.1 — 🤖 Módulo de sincronización a Google Sheets
+**Objetivo:** Poder espejar las operaciones cerradas del simulador a la hoja
+`Trading_Log_IOL`.
+
+**Alcance:**
+- Agregar `gspread` y `oauth2client` a `requirements.txt`.
+- Crear `backend/app/sheets_sync.py`, adaptando `SheetsAuditLogger` del
+  manual para leer los datos desde la base propia (no desde parámetros
+  sueltos) y escribir una fila por operación cerrada.
+- Leer la ruta de `credenciales_google.json` desde una variable de entorno.
+
+**Fuera de alcance:** no correr esto automáticamente todavía (Tarea 6.2).
+
+**Referencia de spec:** `Manual_Integracion_Google_Sheets_Trading_Bot.docx`,
+sección 4 (`sheets_logger.py`) y sección "TABLE" con la estructura de
+columnas A-K.
+
+**Criterio de aceptación:** correr el módulo manualmente sincroniza al menos
+una operación cerrada real a la hoja de Google Sheets de prueba.
+
+**Testing esperado:** captura de pantalla de la hoja con la fila sincronizada.
+
+---
+
+### Tarea 6.2 — 🤖 Endpoint y botón de sincronización manual
+**Objetivo:** Disparar la sincronización desde la app, sin usar la terminal.
+
+**Alcance:**
+- Endpoint `POST /sync/sheets` que sincronice todas las operaciones cerradas
+  no sincronizadas aún (agregar campo `sincronizado_sheets: bool` al modelo
+  `Trade`).
+- Botón "Sincronizar con Sheets" en `frontend/app/simulador/page.tsx`.
+
+**Fuera de alcance:** sincronización automática en tiempo real — queda para
+cuando haya un bot corriendo 24/7 (Fase 10).
+
+**Referencia de spec:** `Manual_Integracion_Google_Sheets_Trading_Bot.docx`,
+sección 5.
+
+**Criterio de aceptación:** tocar el botón sincroniza las operaciones
+pendientes y las marca como sincronizadas (no se duplican en un segundo
+click).
+
+**Testing esperado:** flujo probado dos veces seguidas confirmando que la
+segunda vez no duplica filas.
 
 ---
 
@@ -1315,8 +1368,9 @@ decisión que tomó el sistema con plata real.
 - Tabla `OrdenLog` (o similar) que guarde: timestamp, ticker/bono, tipo de
   orden, monto, resultado de la API de IOL (éxito/error), y qué filtros
   aprobó o vetó antes de decidir.
-- Endpoint `GET /auditoria/ordenes` para revisarlo desde el frontend.
-- Notificar por Telegram (Fase 7) cada orden real ejecutada, sin excepción.
+- Endpoint `GET /auditoria/ordenes` para revisarlo desde el frontend o Sheets.
+- Sincronizar automáticamente cada orden real ejecutada a Google Sheets (si
+  se implementó la Fase 6) y notificar por Telegram (Fase 7) sin excepción.
 
 **Fuera de alcance:** no es una tarea de UI compleja, con una tabla simple en
 el frontend alcanza.

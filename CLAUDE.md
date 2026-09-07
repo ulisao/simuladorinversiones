@@ -20,6 +20,7 @@ El plan completo, fase por fase, está en `tareasdesarrollo.md` (raíz del repo)
 backend/                 API FastAPI + SQLite (SQLAlchemy)
   app/
     main.py              Endpoints HTTP. Todo inline, sin routers.
+    auth.py              API key en header X-API-Key (dependencia global)
     models.py            Tablas SQLAlchemy (BrokerConfig, Trade)
     schemas.py           Modelos Pydantic de entrada/salida
     crud.py              Acceso a datos y armado del dashboard
@@ -32,6 +33,7 @@ backend/                 API FastAPI + SQLite (SQLAlchemy)
     risk_filters.py      Circuit breaker de VIX y sentimiento de noticias (FinBERT)
     smart_money.py       RVOL y compras de insiders (SEC Form 4)
     signals.py           Orquestación del escaneo de señales
+    sheets_sync.py       Espejo de operaciones cerradas a Google Sheets (Fase 6)
   tests/                 pytest
   requirements.txt
   seed.py                Carga las 5 operaciones de ejemplo del Excel
@@ -54,6 +56,7 @@ flowchart TD
     MAIN --> SIG[signals.py]
     MAIN --> MD[market_data.py]
     MAIN --> RF[risk_filters.py]
+    MAIN --> SH[sheets_sync.py]
 
     CRUD --> CALC[calculations.py<br/>ÚNICA fuente de verdad]
     CRUD --> MODELS[models.py]
@@ -73,6 +76,9 @@ flowchart TD
     CFG --> TF
     CFG --> FIF
 
+    SH --> CALC
+    SH --> MODELS
+    SH -.-> GS{{Google Sheets API}}
     MD -.-> YF{{yfinance}}
     RF -.-> YF
     RF -.-> FEEDS{{RSS Yahoo /<br/>Google News}}
@@ -116,6 +122,10 @@ Formato obligatorio, al final del archivo:
   resultado controlado ante error, nunca propaga la excepción hacia el endpoint.
 - **Los filtros devuelven `(bool, dict)`**, con `dict["motivo"]` cuando el bool es
   `False`. Los motivos de veto se pierden nunca: se listan aparte en la respuesta.
+- **La auth es una dependencia global, no por endpoint.** Se registra en
+  `FastAPI(dependencies=[Depends(auth.verificar_api_key)])`, así una ruta nueva
+  queda protegida sin que haya que acordarse de decorarla. Si algo tiene que ser
+  público, se agrega a `auth.RUTAS_PUBLICAS` — nunca se saca la dependencia global.
 - **`main.py` mantiene los endpoints inline**, agrupados por sección con comentarios
   `# ---------- Nombre ----------`, como ya está.
 - **Frontend**: componentes con `"use client"` cuando usan estado, tipos en

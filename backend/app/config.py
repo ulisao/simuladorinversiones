@@ -156,6 +156,36 @@ SEC_USER_AGENT = os.getenv(
     "SEC_USER_AGENT", "Simulador Inversiones IA (contacto: ulisessbaretta@gmail.com)"
 )
 
+# ---------- Autenticación de la API ----------
+# La API expone el saldo real de la cuenta comitente (`/iol/saldo`) y permite
+# crear y borrar operaciones. Sin esto, cualquiera que llegue al puerto puede
+# leerlo y escribirlo.
+#
+# Falla cerrada: si no hay `API_KEY`, la API responde 503 a todo salvo las rutas
+# públicas. Para correr sin auth hay que pedirlo explícitamente con
+# `API_AUTH_DESHABILITADA=true` — un descuido no puede dejar la API abierta.
+API_KEY = os.getenv("API_KEY", "")
+API_AUTH_DESHABILITADA = _env_bool("API_AUTH_DESHABILITADA", False)
+
+# Orígenes permitidos por CORS. Antes era "*", que con credenciales en un header
+# es innecesariamente amplio. Lista separada por comas.
+CORS_ORIGINS = [
+    o.strip()
+    for o in os.getenv("CORS_ORIGINS", "http://localhost:3000,http://127.0.0.1:3000").split(",")
+    if o.strip()
+]
+
+
+# ---------- Google Sheets como bitácora espejo (Fase 6, opcional) ----------
+# La Fase 6 es opcional: si estas dos no están, `sheets_sync` reporta que no está
+# configurado y la app funciona igual. El JSON de la cuenta de servicio NUNCA va
+# al repo (.gitignore bloquea *credentials*.json y credenciales_google.json).
+GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
+
+# Nombre exacto de la hoja de cálculo, según el manual (sección 1).
+SHEETS_NOMBRE_HOJA = os.getenv("SHEETS_NOMBRE_HOJA", "Trading_Log_IOL")
+
+
 # Dónde se guardan los filings ya descargados, para poder comparar un trimestre
 # contra el anterior. Va fuera de git (ver .gitignore).
 DIR_DATOS_13F = os.path.join(

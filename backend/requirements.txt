@@ -33,6 +33,16 @@ torch==2.13.0
 # `requests` ya está arriba: es el único cliente HTTP que usa notifications.py.
 schedule==1.2.2
 
+# --- Google Sheets como bitácora espejo (Fase 6, opcional) ---
+# La tarea pide `gspread` + `oauth2client`, pero oauth2client está deprecado por
+# Google desde 2018 (repo archivado) y gspread 6 ya NO lo acepta: su `authorize()`
+# espera credenciales de `google-auth`. Se usa `google-auth`, que es lo que
+# gspread documenta hoy. El resto del módulo sigue el manual tal cual.
+# Si falta `credenciales_google.json`, sheets_sync degrada solo y la app arranca
+# igual: la Fase 6 es opcional.
+gspread==6.2.1
+google-auth==2.57.1
+
 # --- Testing ---
 pytest==9.1.1
 httpx==0.28.1
