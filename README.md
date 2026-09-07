@@ -274,6 +274,64 @@ git status --porcelain | grep '\.env$'
 > token con `@BotFather` es inmediato; reescribir el historial de git no
 > "desfiltra" nada que ya se haya publicado.
 
+### Toma automática de posiciones (paper)
+
+Con `PAPER_AUTO_HABILITADO=true`, el scanner no solo avisa la señal: **abre la
+posición simulada solo**, y el monitor la gestiona hasta que cierra. Cierra el
+único paso manual que quedaba en el circuito.
+
+> [!warning] Esto NO opera en IOL
+> No envía ninguna orden. Lo único que se le pide a IOL es el **precio** (lectura).
+> Las posiciones existen solo en `simulador.db` y se ven en el dashboard.
+
+```mermaid
+flowchart LR
+    SC[scanner_job<br/>cada 10 min] --> SIG[señal nueva]
+    SIG --> TG{{Telegram}}
+    SIG --> PT[paper_trader]
+    PT --> G{guardrails}
+    G -- rechaza --> LOG[/motivo en el log/]
+    G -- acepta --> TR[(Trade abierto)]
+    TR --> PM[monitor de salidas<br/>TP1 · trailing · TP2 · 16:50]
+    PM --> DASH[/Dashboard/]
+```
+
+```bash
+# backend/.env
+PAPER_AUTO_HABILITADO=true
+```
+
+Guardrails, todos desde `config.py`: máximo de posiciones (`MAX_POSICIONES`), un
+solo ticket por activo, monto por posición (`monto_por_posicion`), cupo por
+estrategia (`cupo_de`), piso de capital libre (`SALDO_MINIMO_OPERAR`) y papeles
+enteros.
+
+> [!warning] El capital configurado define si el bot abre algo o no
+> Con `CAPITAL_TOTAL=100000` el cupo por posición de swing es de **$20.000**, y
+> hoy un CEDEAR de AAPL vale $25.240 y un bono AL30, $85.330 (cotizan por lámina
+> de 100 nominales). Con ese capital **no se toma ningún bono nunca** y de los
+> CEDEARs solo los más baratos.
+> No es un bug: el síntoma es "el bot no abre nada" y el motivo exacto queda en el
+> log (`PAPER (BONO): 0 abierta(s), 6 sin tomar — AL30: Con $20,000 no alcanza…`).
+> Como es plata simulada, subir `CAPITAL_TOTAL` en el `.env` no tiene costo y hace
+> que la validación de la Tarea 10.4 junte una muestra usable.
+
+### Dos precios del mismo activo, y no son intercambiables
+
+Esta es la regla que más fácil se rompe en este proyecto.
+
+| Fuente | Devuelve | Se usa para |
+|---|---|---|
+| `market_data.get_last_price` (yfinance) | El **subyacente en USD** — AAPL = US$ 319,97 | Patrón técnico: ATR, EMAs, RSI, fuerza relativa vs. SPY |
+| `precios.precio_operativo` (IOL) | El **CEDEAR/bono en ARS** — AAPL = $ 25.240 | Plata: tamaño de posición, precio de entrada, resultado neto, stop-loss |
+
+> [!warning] Mezclarlos liquida posiciones sanas
+> Una posición tomada a $25.240 y sondeada contra US$ 319,97 se ve como una
+> pérdida del **98,7%**: el gestor dispara el stop en el primer tick. Y los bonos
+> argentinos directamente no existen en yfinance, así que un bono sondeado por ahí
+> nunca tendría stop ni take-profit. El monitor usa **solo** `precios.precio_operativo`,
+> y si IOL no responde saltea el tick en vez de caer a yfinance.
+
 ### Bitácora espejo en Google Sheets (Fase 6, opcional)
 
 Espeja cada operación **cerrada** a la hoja `Trading_Log_IOL`, para poder mirar
@@ -622,7 +680,7 @@ con la evidencia de cómo se probó, en `PROGRESS.md`.
 | 3 | **Filtro de noticias y riesgo** | ✅ | Circuit breaker de VIX + FinBERT local, como capa de veto antes de sugerir una compra. |
 | 3b | **Consenso institucional (13F)** | ✅ | Segunda estrategia, independiente del swing técnico y con su propio cupo de capital: sigue qué compraron 5 fondos grandes en SEC EDGAR y exige que coincidan al menos dos. |
 | 4 | **Conectar IOL en modo lectura** | ✅ | Saldo y tenencia real de la cuenta comitente, dólar CCL y cotizaciones reales en pesos de BYMA. El login contra IOL está verificado. Habilitó además las señales de bonos (9.4), que necesitaban precio en Contado Inmediato. |
-| 5 | **Alertas y escaneo 24/7** | ✅ | Telegram avisa cierres, señales nuevas y el reporte semanal. `scanner_job.py` corre **24/7 en el VPS** bajo systemd ([cómo instalarlo](#correr-247-en-el-vps-systemd)), verificado tras un reinicio real del servidor. Lo que sigue no es código: el período de validación de 3-4 semanas (Tarea 10.4 👤). |
+| 5 | **Alertas, escaneo 24/7 y paper automático** | ✅ | Telegram avisa cierres, señales nuevas y el reporte semanal. `scanner_job.py` corre **24/7 en el VPS** bajo systemd ([cómo instalarlo](#correr-247-en-el-vps-systemd)), verificado tras un reinicio real del servidor. Con `PAPER_AUTO_HABILITADO=true` además **abre las posiciones simuladas solo** y las gestiona hasta que cierran ([cómo funciona](#toma-automática-de-posiciones-paper)), sin tocar IOL. Lo que sigue no es código: el período de validación de 3-4 semanas (Tarea 10.4 👤). |
 | 5b | **Bitácora en Google Sheets** | 🟡 | Opcional. Las operaciones cerradas se espejan a la hoja `Trading_Log_IOL` con un botón en el simulador, para mirarlas desde el celular. Código listo y probado; **falta** la cuenta de servicio de Google (Tarea 0.4 👤) para hacer la primera sincronización real. |
 | 6 | **Ejecución automática de órdenes** | ⛔ | Recién después de varias semanas de paper trading con esperanza matemática positiva. Implica manejar plata real: logs auditables y límites de riesgo estrictos (stop-loss, tamaño de posición) desde el día uno. |
 

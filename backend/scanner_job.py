@@ -50,7 +50,8 @@ from typing import Any, Optional
 import schedule
 
 import position_monitor_job
-from app import bond_signals, notifications, signals, weekly_report
+from app import bond_signals, config, notifications, paper_trader, signals, weekly_report
+from app.database import SessionLocal
 
 logger = logging.getLogger("scanner")
 
@@ -115,6 +116,27 @@ def reiniciar_estado() -> None:
 # ---------- Ciclos ----------
 
 
+def _abrir_en_paper(candidatos: list[dict], estrategia: str, tipo: str) -> list:
+    """Abre las posiciones simuladas de los candidatos nuevos, si está habilitado.
+
+    Va en su propia sesión y atrapa todo: que falle la apertura no puede tumbar
+    el ciclo de escaneo, que ya hizo lo suyo (detectar y avisar).
+    """
+    if not paper_trader.habilitado() or not candidatos:
+        return []
+
+    db = SessionLocal()
+    try:
+        return paper_trader.abrir_desde_candidatos(
+            db, candidatos, estrategia=estrategia, tipo=tipo
+        )
+    except Exception as exc:  # noqa: BLE001
+        logger.exception("Error abriendo posiciones en paper: %s", exc)
+        return []
+    finally:
+        db.close()
+
+
 def ciclo_senales(ignorar_horario: bool = False) -> list[dict]:
     """Escanea y notifica lo nuevo. Devuelve los candidatos efectivamente avisados."""
     momento = position_monitor_job.ahora_art()
@@ -158,7 +180,18 @@ def ciclo_senales(ignorar_horario: bool = False) -> list[dict]:
         len(resultado.get("descartados", [])),
     )
 
-    avisados.extend(_ciclo_bonos(hoy))
+    # La apertura va después del aviso: si algo falla abriendo, el aviso ya salió
+    # y la señal no se pierde.
+    abiertas = _abrir_en_paper(avisados, config.ESTRATEGIA_SWING, "CEDEAR")
+    if abiertas:
+        logger.info("PAPER: %d posición(es) abiertas de CEDEARs", len(abiertas))
+
+    bonos = _ciclo_bonos(hoy)
+    abiertas_bonos = _abrir_en_paper(bonos, config.ESTRATEGIA_SWING, "BONO")
+    if abiertas_bonos:
+        logger.info("PAPER: %d posición(es) abiertas de bonos", len(abiertas_bonos))
+
+    avisados.extend(bonos)
     return avisados
 
 

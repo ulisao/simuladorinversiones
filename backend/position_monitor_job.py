@@ -2,7 +2,12 @@
 Monitor de posiciones abiertas del simulador (Tarea 3.6).
 
 Recorre las operaciones con `estado_posicion="ABIERTA"`, consulta el precio
-actual y le pasa cada tick a `PositionManager` (Tarea 3.5). Cuando el gestor
+actual y le pasa cada tick a `PositionManager` (Tarea 3.5).
+
+> El precio sale de `precios.precio_operativo` — el **real en pesos de BYMA**, vía
+> IOL — y no de `market_data`, que devuelve el subyacente en USD. Las posiciones
+> se abren en pesos: sondearlas contra dólares haría saltar el stop en el primer
+> tick con una pérdida que no existe. Ver el módulo `app/precios.py`. Cuando el gestor
 devuelve una acción de venta, la refleja en el simulador:
 
 * venta **parcial** (TP1, 50%)  -> parte la operación en dos registros
@@ -35,10 +40,9 @@ from typing import Optional
 
 import pytz
 
-from app import crud, notifications
+from app import crud, notifications, precios
 from app.config import TZ_BYMA
 from app.database import SessionLocal
-from app.market_data import MarketDataError, get_last_price
 from app.position_manager import PositionManager
 
 logger = logging.getLogger("position_monitor")
@@ -173,12 +177,18 @@ def ciclo(ignorar_horario: bool = False) -> list[dict]:
 
         for trade in abiertos:
             try:
-                precio = get_last_price(trade.ticker)
-            except MarketDataError as exc:
-                # Un ticker sin datos no puede frenar el resto del barrido: si
+                precio = precios.precio_operativo(trade.ticker)
+            except precios.PrecioError as exc:
+                # Un ticker sin precio no puede frenar el resto del barrido: si
                 # abortáramos acá, una posición rota dejaría a las demás sin
                 # gestionar justo en la ventana del cierre preventivo.
-                logger.warning("%s: sin precio (%s)", trade.ticker, exc)
+                #
+                # Se saltea en vez de caer a yfinance a propósito: yfinance
+                # devuelve el subyacente en USD y la posición está tomada en
+                # pesos. Comparar las dos cosas dispararía el stop con una
+                # pérdida inventada del 98%. Mejor no gestionar este tick que
+                # gestionarlo con el precio equivocado.
+                logger.warning("%s: sin precio operativo (%s)", trade.ticker, exc)
                 continue
 
             try:

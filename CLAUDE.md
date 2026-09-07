@@ -33,6 +33,8 @@ backend/                 API FastAPI + SQLite (SQLAlchemy)
     risk_filters.py      Circuit breaker de VIX y sentimiento de noticias (FinBERT)
     smart_money.py       RVOL y compras de insiders (SEC Form 4)
     signals.py           Orquestación del escaneo de señales
+    precios.py           Precio operativo en PESOS (IOL) — plata, no patrón técnico
+    paper_trader.py      Toma automática de posiciones simuladas (no opera en IOL)
     sheets_sync.py       Espejo de operaciones cerradas a Google Sheets (Fase 6)
   tests/                 pytest
   requirements.txt
@@ -65,6 +67,10 @@ flowchart TD
     SIG --> RF
     SIG --> SM[smart_money.py]
     SIG --> TF[technical_filters.py]
+    SIG --> PT[paper_trader.py]
+    PT --> PRE[precios.py]
+    PT --> CRUD
+    PRE -.-> IOL{{IOL}}
 
     TF --> MD
     SM --> MD
@@ -120,6 +126,11 @@ Formato obligatorio, al final del archivo:
 - **Los módulos de datos externos nunca rompen el proceso.** `market_data`,
   `risk_filters` y `smart_money` hablan con internet: toda función devuelve un
   resultado controlado ante error, nunca propaga la excepción hacia el endpoint.
+- **Dos precios, no mezclarlos.** `market_data` (yfinance) da el **subyacente en
+  USD** y sirve solo para patrón técnico (ATR, EMAs, RSI). `precios.precio_operativo`
+  (IOL) da el **precio real en pesos de BYMA** y es el único que se usa para plata:
+  tamaño de posición, precio de entrada y sondeo del gestor de salidas. Mezclarlos
+  hace saltar el stop con una pérdida del 98% que no existe.
 - **Los filtros devuelven `(bool, dict)`**, con `dict["motivo"]` cuando el bool es
   `False`. Los motivos de veto se pierden nunca: se listan aparte en la respuesta.
 - **La auth es una dependencia global, no por endpoint.** Se registra en

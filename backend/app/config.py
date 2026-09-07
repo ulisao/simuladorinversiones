@@ -156,6 +156,19 @@ SEC_USER_AGENT = os.getenv(
     "SEC_USER_AGENT", "Simulador Inversiones IA (contacto: ulisessbaretta@gmail.com)"
 )
 
+# ---------- Toma automática de posiciones en paper (fuera del plan) ----------
+# En true, el scanner no solo avisa la señal: además abre la posición simulada en
+# la base, y el monitor de salidas la gestiona sola hasta que cierra. Es
+# exactamente el paso manual que la Tarea 10.4 pide hacer a mano.
+#
+# NO opera en IOL. Lo único que se le pide a IOL es el precio (lectura). El kill
+# switch de la ejecución real sigue siendo MODO_FANTASMA, aparte de este.
+#
+# Default false: alguien que clone el repo no debería encontrarse con que se le
+# empiezan a crear operaciones solas.
+PAPER_AUTO_HABILITADO = _env_bool("PAPER_AUTO_HABILITADO", False)
+
+
 # ---------- Autenticación de la API ----------
 # La API expone el saldo real de la cuenta comitente (`/iol/saldo`) y permite
 # crear y borrar operaciones. Sin esto, cualquiera que llegue al puerto puede

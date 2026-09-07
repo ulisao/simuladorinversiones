@@ -2906,3 +2906,173 @@ Ninguno de los tres se commitea.
 > [!todo] Próximo paso
 > Sigue siendo la Tarea 10.4 👤: 3-4 semanas de validación en modo solo sugerir.
 > Antes conviene pushear y actualizar el VPS.
+
+---
+
+## 2026-09-07 (8) — Toma automática de posiciones en paper (fuera del plan)
+
+> [!summary] Qué se hizo
+> El bot ahora **abre las posiciones solo** cuando detecta una señal, y el monitor
+> las gestiona hasta que cierran. Todo queda en `simulador.db` y se ve en el
+> dashboard: **no se envía ninguna orden a IOL**. Es exactamente el paso manual que
+> la Tarea 10.4 pide hacer a mano ("cargarla a mano en `/simulador` y hacerle
+> seguimiento hasta que cierre"), automatizado.
+>
+> En el camino apareció **un bug serio que hacía inviable la función**, y que
+> también afectaba al circuito manual. Ver abajo.
+
+### El circuito, ahora cerrado
+
+```mermaid
+flowchart LR
+    SC[scanner_job<br/>cada 10 min] --> SIG[señal nueva]
+    SIG --> TG{{Telegram}}
+    SIG --> PT[paper_trader]
+    PT --> PRE[precios.precio_operativo<br/>ARS real de IOL]
+    PT --> G{guardrails}
+    G -- rechaza --> LOG[/resumen en el log/]
+    G -- acepta --> TR[(Trade abierto)]
+    TR --> PM[position_monitor_job<br/>TP1 · trailing · TP2 · 16:50]
+    PM --> DASH[/Dashboard/]
+```
+
+### El bug: se sondeaban posiciones en pesos contra precios en dólares
+
+> [!warning] Habría liquidado toda posición real en el primer tick
+> `position_monitor_job` pedía el precio con `market_data.get_last_price`, que es
+> **yfinance y devuelve el subyacente en USD**. Una posición de AAPL tomada al
+> precio real del CEDEAR ($25.240) comparada contra US$ 319,97 se ve como una
+> pérdida del **98,7%**: el gestor habría disparado el stop-loss inmediatamente,
+> con una pérdida inventada.
+>
+> No había explotado todavía porque no hay ninguna posición abierta: la única
+> operación de la base es el ejemplo semilla, ya cerrada. Pero **afectaba también
+> al circuito manual** de la Tarea 10.4 — la primera operación que se cargara a
+> mano con el precio real de IOL se habría cerrado sola al minuto siguiente.
+
+> [!warning] Y los bonos eran invisibles para el gestor
+> `get_last_price("AL30")` levanta `MarketDataError` (yfinance no tiene bonos
+> argentinos). El monitor lo logueaba como warning y **salteaba la posición**: un
+> bono abierto nunca habría tenido stop-loss, take-profit ni cierre preventivo.
+> Se habría quedado abierto para siempre.
+
+**El arreglo:** módulo nuevo `app/precios.py` con `precio_operativo(simbolo)`, que
+trae el precio **real en pesos de BYMA** vía IOL — el mismo que ya usaba
+`bond_signals`. El monitor pasó a usarlo y ya no importa `yfinance`.
+
+| Fuente | Devuelve | Para qué |
+|---|---|---|
+| `market_data.get_last_price` | Subyacente en **USD** | Patrón técnico: ATR, EMAs, RSI, fuerza relativa |
+| `precios.precio_operativo` | CEDEAR/bono en **ARS** | Plata: tamaño, entrada, resultado, stop |
+
+> [!note] Ante la duda, no gestiona
+> Si IOL no da precio, el monitor **saltea** ese tick en vez de caer a yfinance.
+> Gestionar con el precio equivocado es peor que no gestionar.
+
+### Guardrails de la apertura automática
+
+Todos salen de `config.py`; ninguno hardcodeado.
+
+| Control | Config | Qué evita |
+|---|---|---|
+| Máximo de posiciones | `MAX_POSICIONES` | Sobre-exposición |
+| Un ticket por activo | — | Duplicar la señal en dos ciclos |
+| Monto por posición | `monto_por_posicion(estrategia)` | Que una apuesta se coma el cupo |
+| Cupo por estrategia | `cupo_de(estrategia)` | Que swing se coma el capital de smart money |
+| Piso de capital libre | `SALDO_MINIMO_OPERAR` | Abrir con las últimas monedas |
+| Papeles enteros ≥ 1 | — | Comprar 0,4 CEDEARs |
+
+**Archivos tocados:** `backend/app/precios.py` (nuevo),
+`backend/app/paper_trader.py` (nuevo), `backend/tests/test_precios.py` (nuevo),
+`backend/tests/test_paper_trader.py` (nuevo), `backend/position_monitor_job.py`,
+`backend/scanner_job.py`, `backend/app/config.py`, `backend/.env.example`,
+`CLAUDE.md`, `README.md`.
+
+### Cómo se probó
+
+**1. Suite completa (490 tests, 39 nuevos):**
+
+```
+$ ./venv/Scripts/python.exe -m pytest -m "not network" -q
+490 passed, 8 deselected, 115 warnings in 9.73s
+```
+
+**2. Ciclo real del scanner, con la toma automática encendida:**
+
+```
+15:24:04  INFO  Escaneo CEDEARs: 1 candidato(s), 1 nuevo(s) notificado(s), 9 descartado(s)
+15:24:06  INFO  PAPER (CEDEAR): 0 abierta(s), 1 sin tomar — QQQ: Con $20,000 no alcanza para 1 papel de QQQ a $57,675.00.
+15:24:36  INFO  Escaneo bonos: 6 candidato(s), 6 nuevo(s) notificado(s), 3 descartado(s)
+15:24:38  INFO  PAPER (BONO): 0 abierta(s), 6 sin tomar — AL30: Con $20,000 no alcanza para 1 papel de AL30 a $85,330.00.; GD30: ... a $88,820.00.; AL35: ... a $116,780.00.…
+15:24:38  INFO  Ciclo terminado: 7 señal(es) notificada(s), 0 acción(es) del gestor
+```
+
+**3. Que sí abre cuando el capital alcanza** (prueba en seco, sin escribir en la base):
+
+```
+$ CAPITAL_TOTAL=2000000 python -c "..."
+CAPITAL_TOTAL $2,000,000 -> monto x posicion swing $400,000
+  QQQ    ABRIRIA    6 papeles a $  57,500.00  = $     345,000
+  AL30   ABRIRIA    4 papeles a $  85,320.00  = $     341,280
+  GD30   ABRIRIA    4 papeles a $  88,820.00  = $     355,280
+  NVDA   ABRIRIA   26 papeles a $  15,370.00  = $     399,620
+```
+
+### Pendiente / notas
+
+> [!warning] Con $100.000 de capital el bot casi no va a abrir nada
+> Se consultó y **la decisión fue dejar `CAPITAL_TOTAL` en $100.000**. Con eso el
+> cupo por posición de swing es de $20.000, y hoy los precios reales en BYMA son:
+>
+> | Activo | Precio ARS | ¿Entra en $20.000? |
+> |---|---|---|
+> | NVDA | 15.370 | sí, 1 papel |
+> | AAPL | 25.240 | no |
+> | MELI | 26.000 | no |
+> | KO | 28.160 | no |
+> | QQQ | 57.675 | no |
+> | AL30 / GD30 / AE38 | 85.330 – 120.680 | **no, ni con el cupo entero** |
+>
+> Los bonos cotizan por lámina de 100 nominales: el ticket mínimo (~$85.000)
+> supera el capital total. **Con esta configuración no se va a tomar ningún bono
+> nunca**, y de los CEDEARs solo los más baratos. Es una decisión tomada a
+> conciencia, pero conviene tenerla presente al leer el veredicto del dashboard al
+> final de la Tarea 10.4: si hay 3 operaciones en un mes, la muestra no alcanza
+> para concluir nada. Subir `CAPITAL_TOTAL` es gratis (es plata simulada) y se
+> puede hacer en cualquier momento desde el `.env`.
+
+> [!note] El rechazo se loguea como resumen, no una línea por candidato
+> Con este capital el rechazo es el caso normal: a una línea INFO por candidato
+> serían ~50 líneas por hora repitiendo lo mismo, y taparían los eventos reales en
+> el journal durante las 3-4 semanas de validación. Hay una línea de resumen por
+> universo y por ciclo; el detalle por candidato está en DEBUG.
+
+> [!warning] El VPS necesita `git pull` para que esto corra
+> `PAPER_AUTO_HABILITADO=true` ya está en el `.env` del servidor, pero el código
+> que corre es `ed74ead`. Hasta que se pushee y se haga
+> `git pull && sudo systemctl restart tradingbot-api tradingbot-scanner`, el VPS
+> sigue solo avisando por Telegram.
+
+> [!note] Un bug que el doble de test tapaba
+> `IOLClient.esta_configurado` es una **property**, no un método. `precios.py`
+> la llamaba como `esta_configurado()` y reventaba con `TypeError` — pero los
+> tests pasaban, porque el doble la definía como método. Se corrigieron los dos:
+> el doble ahora imita la property, que es lo que hace que el test sirva.
+
+> [!warning] Al activar el flag, la suite empezó a escribir en la base real
+> Con `PAPER_AUTO_HABILITADO=true` en el `.env`, los tests que corren un ciclo del
+> scanner abrían posiciones **en `simulador.db`**, la base de producción. Dejó una
+> operación de NVDA inventada en el historial (`id=2`), y hacía que un test
+> fallara de forma intermitente según el orden de ejecución.
+>
+> Se corrigió con una fixture `autouse` en `conftest.py` que apaga la toma
+> automática en toda la suite — `test_paper_trader.py` la reenciende con la suya —
+> y se borró la operación espuria. Verificado: **3 corridas seguidas en verde y la
+> base queda con la única operación semilla**.
+>
+> La causa de fondo era que la suite dependía del `.env` de cada máquina. Es el
+> mismo patrón que ya se había aplicado con la API key.
+
+> [!todo] Próximo paso
+> Sigue siendo la Tarea 10.4 👤. Con esto, el circuito ya no depende de que haya
+> alguien cargando operaciones a mano: alcanza con mirar el dashboard.

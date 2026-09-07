@@ -29,3 +29,19 @@ def _auth_apagada_por_defecto(monkeypatch):
     from app import config
 
     monkeypatch.setattr(config, "API_AUTH_DESHABILITADA", True, raising=False)
+
+
+@pytest.fixture(autouse=True)
+def _paper_auto_apagado_por_defecto(monkeypatch):
+    """Apaga la toma automática de posiciones en toda la suite.
+
+    Sin esto, un test que corre un ciclo del scanner abre posiciones **en
+    `simulador.db`**, la base real: pasó, y dejó una operación de NVDA inventada
+    en el historial. Además hacía que la suite dependiera del `.env` de cada
+    máquina, que es por qué un test empezó a fallar de forma intermitente.
+
+    `tests/test_paper_trader.py` la vuelve a encender con su propia fixture.
+    """
+    from app import config
+
+    monkeypatch.setattr(config, "PAPER_AUTO_HABILITADO", False, raising=False)
