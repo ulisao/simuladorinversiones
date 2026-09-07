@@ -29,6 +29,8 @@ simulador-inversiones/
 │                      position_monitor_job.py.
 ├── frontend/          Next.js + Tailwind. Dashboard, Simulador, Señales,
 │                      Configuración.
+├── deploy/            Units systemd (tradingbot-api, tradingbot-scanner)
+│                      para que el bot corra 24/7 en el VPS.
 └── docs/              Manuales originales (.docx), su texto plano en
                         specs-txt/ y parametros-riesgo.md.
 ```
@@ -211,6 +213,120 @@ git status --porcelain | grep '\.env$'
 > token con `@BotFather` es inmediato; reescribir el historial de git no
 > "desfiltra" nada que ya se haya publicado.
 
+### Correr 24/7 en el VPS (systemd)
+
+Los dos servicios viven en [`deploy/`](./deploy) y están pensados para que el
+sistema se levante solo después de un corte de luz o un `reboot`.
+
+| Servicio | Qué corre | Reinicio |
+|---|---|---|
+| `tradingbot-api.service` | `uvicorn app.main:app` en `127.0.0.1:8123` | `always`, `RestartSec=10` |
+| `tradingbot-scanner.service` | `scanner_job.py` — escaneo cada 10 min, monitor de posiciones y reporte semanal | `always`, `RestartSec=10` |
+
+```mermaid
+flowchart TD
+    BOOT([Arranca el VPS]) --> NET[network-online.target]
+    NET --> API[tradingbot-api.service<br/>uvicorn :8123]
+    NET --> SCAN[tradingbot-scanner.service<br/>scanner_job.py]
+    API -. After= .-> SCAN
+
+    ENV[/backend/.env<br/>chmod 600/] -->|EnvironmentFile=| API
+    ENV -->|EnvironmentFile=| SCAN
+
+    SCAN --> TG{{Telegram}}
+    API --> DB[(simulador.db)]
+    SCAN --> DB
+
+    CRASH([Se cae el proceso]) -->|Restart=always<br/>10 s| API
+    CRASH -->|Restart=always<br/>10 s| SCAN
+```
+
+#### Antes de instalar
+
+> [!warning] El `.env` tiene que existir en el servidor
+> Las dos units usan `EnvironmentFile=`, y systemd **falla el arranque** si el
+> archivo no existe. Completar primero los 6 pasos de
+> ["Cargar las credenciales al desplegar (VPS)"](#cargar-las-credenciales-al-desplegar-vps).
+
+> [!warning] La API escucha en `127.0.0.1`, no en `0.0.0.0` — a propósito
+> `app/main.py` no tiene autenticación de ningún tipo y su CORS es
+> `allow_origins=["*"]`. Publicada en internet, cualquiera podría leer
+> `/iol/saldo` (saldo y tenencia reales de la cuenta comitente) y cargar o borrar
+> operaciones. Con `127.0.0.1` solo se llega desde el propio VPS.
+> Para consumirla desde afuera (por ejemplo un frontend en Vercel) **no alcanza
+> con cambiar el bind**: hace falta un reverse proxy con TLS *y* alguna
+> autenticación delante. Mientras eso no exista, lo seguro es un túnel SSH:
+> `ssh -L 8123:127.0.0.1:8123 usuario@vps` y apuntar `NEXT_PUBLIC_API_URL` a
+> `http://127.0.0.1:8123` en la máquina local.
+
+#### Instalar y habilitar
+
+Las units vienen con el usuario `tradingbot` y la ruta
+`/opt/tradingbot/simuladorinversiones`. Si tu layout es otro, el `sed` del paso 2
+reemplaza las dos cosas de una sola vez.
+
+```bash
+# 1. Usuario de servicio sin privilegios ni shell de login (si no existe).
+sudo useradd --system --create-home --shell /usr/sbin/nologin tradingbot
+
+# 2. Ajustar usuario y ruta si hacen falta. Editar estas dos variables y correr.
+USUARIO=tradingbot
+RUTA=/opt/tradingbot/simuladorinversiones
+sed -i "s|/opt/tradingbot/simuladorinversiones|$RUTA|g; s|^User=.*|User=$USUARIO|; s|^Group=.*|Group=$USUARIO|" deploy/*.service
+
+# 3. Copiar las units y recargar systemd.
+sudo cp deploy/tradingbot-api.service deploy/tradingbot-scanner.service /etc/systemd/system/
+sudo systemctl daemon-reload
+
+# 4. Habilitar (arrancan solos al bootear) y levantar ahora.
+sudo systemctl enable --now tradingbot-api.service tradingbot-scanner.service
+
+# 5. Confirmar que los dos quedaron en "active (running)".
+sudo systemctl status tradingbot-api.service tradingbot-scanner.service --no-pager
+```
+
+> [!note] El scanner avisa por Telegram cuando arranca
+> Si al hacer `enable --now` llega el mensaje *"🟢 Scanner iniciado"* al chat, el
+> servicio levantó **y** las credenciales del `.env` entraron bien. Es la
+> verificación más rápida de que todo quedó conectado.
+
+#### Operación diaria
+
+```bash
+# Ver los logs en vivo (el scanner loguea cada ciclo de escaneo).
+sudo journalctl -u tradingbot-scanner.service -f
+
+# Últimas 100 líneas de la API.
+sudo journalctl -u tradingbot-api.service -n 100 --no-pager
+
+# Reiniciar después de un `git pull`.
+sudo systemctl restart tradingbot-api.service tradingbot-scanner.service
+
+# Parar el escaneo sin desinstalar nada (deja de notificar).
+sudo systemctl stop tradingbot-scanner.service
+
+# Probar que sobreviven a un reinicio del servidor (criterio de la Tarea 10.3).
+sudo reboot
+# ... volver a entrar por SSH y repetir el `systemctl status` del paso 5.
+```
+
+> [!warning] Zona horaria: la unit la fija, pero el servidor también tiene que estar en ART
+> Las dos units traen `Environment=TZ=America/Argentina/Buenos_Aires` porque
+> `schedule` dispara el reporte semanal con el reloj del proceso
+> (`friday at 17:30`), no con `TZ_BYMA`. Igual conviene dejar el VPS entero en esa
+> zona y con el reloj sincronizado — de eso depende que el cierre preventivo de
+> las 16:50 (Tarea 3.5) salte en el momento exacto:
+> ```bash
+> sudo timedatectl set-timezone America/Argentina/Buenos_Aires
+> sudo timedatectl set-ntp true
+> timedatectl status        # "System clock synchronized: yes"
+> ```
+
+> [!note] Las credenciales no van en la unit
+> `systemctl show tradingbot-scanner` imprime todo lo que esté en `Environment=`,
+> y eso queda en el journal. Por eso el `.env` entra por `EnvironmentFile=` con
+> permisos `600`, y en `Environment=` solo hay `TZ` y `PYTHONUNBUFFERED`.
+
 ### Tests
 
 ```bash
@@ -335,7 +451,7 @@ calculados no se guardan en la base: se derivan al vuelo desde `calculations.py`
 | No hace | Por qué | Se desbloquea con |
 |---|---|---|
 | Ejecutar órdenes | Fase 11, deliberadamente no construida | Validación previa (Tarea 10.4) |
-| Correr 24/7 en un servidor | El scanner ya existe y corre solo, pero todavía en tu máquina | VPS (Tarea 10.2 👤) |
+| Correr 24/7 en un servidor | El scanner corre solo y las units systemd ya están en `deploy/` | Instalarlas en el VPS (Tarea 10.3) |
 
 Hoy es **100% papel**: vos cargás, vos cerrás, el sistema calcula y opina.
 
@@ -367,7 +483,7 @@ con la evidencia de cómo se probó, en `PROGRESS.md`.
 | 3 | **Filtro de noticias y riesgo** | ✅ | Circuit breaker de VIX + FinBERT local, como capa de veto antes de sugerir una compra. |
 | 3b | **Consenso institucional (13F)** | ✅ | Segunda estrategia, independiente del swing técnico y con su propio cupo de capital: sigue qué compraron 5 fondos grandes en SEC EDGAR y exige que coincidan al menos dos. |
 | 4 | **Conectar IOL en modo lectura** | ✅ | Saldo y tenencia real de la cuenta comitente, dólar CCL y cotizaciones reales en pesos de BYMA. El login contra IOL está verificado. Habilitó además las señales de bonos (9.4), que necesitaban precio en Contado Inmediato. |
-| 5 | **Alertas y escaneo 24/7** | 🟡 | Telegram ya avisa cierres, señales nuevas y el reporte semanal, y `scanner_job.py` escanea solo sin que nadie abra la app. **Falta:** el VPS para que corra 24/7 (Tarea 10.2 👤). |
+| 5 | **Alertas y escaneo 24/7** | 🟡 | Telegram ya avisa cierres, señales nuevas y el reporte semanal, y `scanner_job.py` escanea solo sin que nadie abra la app. Las units systemd están en `deploy/` ([cómo instalarlas](#correr-247-en-el-vps-systemd)). **Falta:** dejarlas corriendo en el VPS y el período de validación (Tarea 10.4 👤). |
 | 6 | **Ejecución automática de órdenes** | ⛔ | Recién después de varias semanas de paper trading con esperanza matemática positiva. Implica manejar plata real: logs auditables y límites de riesgo estrictos (stop-loss, tamaño de posición) desde el día uno. |
 
 ```mermaid

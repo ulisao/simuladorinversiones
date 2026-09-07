@@ -1,0 +1,46 @@
+# Tarea 10.3 — Job de escaneo periódico (Tarea 10.1), bajo systemd.
+#
+# Escanea CEDEARs y bonos cada 10 min en rueda BYMA, corre el monitor de
+# posiciones (cada 5 min, cada 1 min desde las 16:40 para el cierre preventivo
+# de las 16:50) y manda el reporte semanal los viernes 17:30.
+#
+# NO ejecuta órdenes: MODO_FANTASMA=true en el .env es el kill switch.
+#
+# Instalación y comandos en README.md, sección "Correr 24/7 en el VPS (systemd)".
+
+[Unit]
+Description=Simulador Inversiones IA - Scanner de senales (modo solo sugerir)
+Documentation=https://github.com/ulisao/simuladorinversiones
+Wants=network-online.target
+After=network-online.target
+# No es una dependencia real: el scanner llama a las funciones en proceso, no a
+# la API por HTTP. Es solo para que al bootear arranquen en un orden previsible.
+After=tradingbot-api.service
+
+[Service]
+Type=exec
+User=tradingbot
+Group=tradingbot
+WorkingDirectory=/opt/tradingbot/simuladorinversiones/backend
+
+EnvironmentFile=/opt/tradingbot/simuladorinversiones/backend/.env
+
+# Imprescindible acá: `schedule` dispara el reporte semanal con el reloj del
+# sistema ("friday at 17:30"), no con TZ_BYMA. Sin esta línea, en un VPS en UTC
+# el reporte sale a las 14:30 ART.
+Environment=TZ=America/Argentina/Buenos_Aires
+Environment=PYTHONUNBUFFERED=1
+
+ExecStart=/opt/tradingbot/simuladorinversiones/backend/venv/bin/python scanner_job.py
+
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

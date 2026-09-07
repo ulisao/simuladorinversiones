@@ -2154,3 +2154,241 @@ flowchart LR
 > Terminar el VPS (Tarea 10.2 👤) y dejar el `scanner_job.py` corriendo 24/7 con
 > `MODO_FANTASMA=true`. Ese es el período de validación de la Tarea 10.4, y es lo
 > único que separa al sistema de poder operar de verdad.
+
+---
+
+## 2026-09-07 (3) — Tarea 10.1 — Verificación en vivo del job de escaneo
+
+> [!summary] Qué se hizo
+> El VPS ya está encendido, así que se arrancó la Fase 10. La Tarea 10.1 estaba
+> escrita desde el 2026-09-06 pero le faltaba **la prueba que pide el criterio de
+> aceptación**: correr el script en modo "siempre activo" y confirmar que llegan
+> mensajes reales a Telegram. Se corrió y llegaron: **10 señales notificadas en un
+> solo ciclo** (1 CEDEAR + 9 bonos). No se tocó código: la tarea ya estaba completa,
+> lo que faltaba era la evidencia.
+
+### Cobertura del alcance, punto por punto
+
+| Punto del alcance (Tarea 10.1) | Dónde está | Estado |
+|---|---|---|
+| `schedule` en `requirements.txt` | `backend/requirements.txt` (`schedule==1.2.2`) | ✅ |
+| Escaneo cada 10 min | `INTERVALO_SENALES_MIN = 10` | ✅ |
+| Solo en rueda BYMA (L-V 11:00-17:00 ART) | `position_monitor_job.es_horario_de_rueda` | ✅ |
+| Llamar `/senales` **en proceso**, no por HTTP | `signals.escanear_senales()` | ✅ |
+| Llamar `/senales/bonos` **en proceso** | `bond_signals.escanear_senales_bonos()` | ✅ |
+| Set de "ya notificadas" para no spamear | `_notificadas`, claves `TICKER@YYYY-MM-DD` | ✅ |
+| Invocar `position_monitor_job` cada ciclo | `ciclo_posiciones()` | ✅ |
+| Cadencia fina cerca de las 16:50 | `intervalo_actual()`: 300 s → **60 s desde las 16:40** | ✅ |
+| No ejecutar ninguna orden | `MODO_FANTASMA=true`, el job solo notifica | ✅ |
+
+> [!note] El escaneo de bonos ya no está fuera de alcance
+> La entrada del 2026-09-06 lo dejó pendiente porque `/senales/bonos` todavía no
+> existía. Con la Tarea 9.4 cerrada el 2026-09-07, `ESCANEO_BONOS_HABILITADO` está
+> en `True` y el ciclo cubre los dos universos. Van en funciones separadas a
+> propósito: si IOL se cae, los bonos fallan solos sin llevarse puesto el escaneo
+> de CEDEARs, que no depende de IOL.
+
+**Archivos tocados:** ninguno de código. Solo esta entrada en `PROGRESS.md`.
+
+### Cómo se probó
+
+**1. Suite de tests del job y del monitor:**
+
+```
+$ ./venv/Scripts/python.exe -m pytest tests/test_scanner_job.py tests/test_position_monitor.py -q
+......................................                                   [100%]
+38 passed in 5.89s
+```
+
+**2. Credenciales cargadas (sin imprimirlas):**
+
+```
+$ ./venv/Scripts/python.exe -c "from app import config; ..."
+Telegram configurado: True
+IOL configurado: True
+MODO_FANTASMA: True
+```
+
+**3. Corrida real contra Telegram** — el criterio de aceptación de la tarea.
+Hoy es domingo, así que se forzó el horario con `--ignorar-horario`:
+
+```
+$ ./venv/Scripts/python.exe scanner_job.py --una-vez --ignorar-horario
+09:52:17  INFO    FinBERT cargado (ProsusAI/finbert), etiquetas={0: 'positive', 1: 'negative', 2: 'neutral'}
+09:52:22  INFO    Titulares evaluados para NVDA: [...]
+09:52:25  INFO    Titulares evaluados para MELI: [...]
+09:52:38  INFO    Titulares evaluados para SPY: [...]
+09:52:41  INFO    Titulares evaluados para QQQ: [...]
+09:52:45  INFO    Titulares evaluados para KO: [...]
+09:52:48  INFO    Titulares evaluados para MSFT: [...]
+09:52:51  INFO    Titulares evaluados para AMZN: [...]
+09:52:52  INFO    Titulares evaluados para GOOGL: [...]
+09:52:56  INFO    Titulares evaluados para TSLA: [...]
+09:52:58  INFO    Escaneo CEDEARs: 1 candidato(s), 1 nuevo(s) notificado(s), 9 descartado(s)
+09:52:59  INFO    Autenticación exitosa en IOL (usuario ma***@gmail.com).
+09:52:59  INFO    Titulares evaluados para AL30: [...]
+09:53:04  INFO    Titulares evaluados para GD30: [...]
+09:53:08  INFO    Titulares evaluados para AL35: [...]
+09:53:11  INFO    Titulares evaluados para GD35: [...]
+09:53:15  INFO    Titulares evaluados para AE38: [...]
+09:53:18  INFO    Titulares evaluados para BA37D: [...]
+09:53:22  INFO    Titulares evaluados para CO26: [...]
+09:53:26  INFO    Titulares evaluados para NDT25: [...]
+09:53:29  INFO    Titulares evaluados para PMM29: [...]
+09:53:40  INFO    Escaneo bonos: 9 candidato(s), 9 nuevo(s) notificado(s), 0 descartado(s)
+09:53:40  INFO    Ciclo terminado: 10 señal(es) notificada(s), 0 acción(es) del gestor
+
+[exited with code 0]
+```
+
+> [!done] Los 10 mensajes salieron
+> `_enviar()` loguea un `WARNING` por cada envío fallido. No hay ninguno en la
+> salida, así que las 10 notificaciones fueron aceptadas por la API de Telegram.
+> El login contra IOL también funcionó dentro del job (`Autenticación exitosa`),
+> que es lo que hace falta para el precio real de los bonos.
+
+### Pendiente / notas
+
+> [!warning] 9 de 9 bonos pasaron los filtros, 0 descartados
+> En el mismo ciclo, los CEDEARs descartaron 9 de 10 y los bonos aprobaron
+> **todos**. Puede ser legítimo (la corrida fue un domingo, con precios del cierre
+> del viernes y el riesgo país en mínimos), pero un filtro que nunca descarta nada
+> no está filtrando. Hay que mirarlo con la rueda abierta antes de darle peso a
+> esas señales — es exactamente el tipo de cosa que la Tarea 10.4 👤 pide revisar
+> ("si sugiere algo sin volumen real, el filtro de liquidez está fallando").
+
+> [!note] 10 mensajes de golpe en el primer ciclo del día
+> La deduplicación evita repetir, pero no agrupa: el primer ciclo de cada jornada
+> puede mandar una decena de mensajes seguidos. Es molesto, no incorrecto. Si en
+> la Tarea 10.4 resulta insoportable, la solución es un mensaje resumen por ciclo
+> en vez de uno por señal.
+
+> [!todo] Próximo paso
+> Tarea 10.3 — los dos servicios `systemd` para que esto corra 24/7 en el VPS.
+
+---
+
+## 2026-09-07 (4) — Tarea 10.3 — Servicios systemd para corrida continua
+
+> [!summary] Qué se hizo
+> Las dos units systemd que faltaban para que el bot corra 24/7 en el VPS y se
+> levante solo después de un corte o un `reboot`, más la sección de instalación
+> en el `README.md` y 15 tests que validan las units estáticamente.
+
+### Qué se creó
+
+| Archivo | Qué levanta | Reinicio |
+|---|---|---|
+| `deploy/tradingbot-api.service` | `uvicorn app.main:app` en `127.0.0.1:8123` | `always` / `RestartSec=10` |
+| `deploy/tradingbot-scanner.service` | `scanner_job.py` (escaneo, monitor de posiciones, reporte semanal) | `always` / `RestartSec=10` |
+| `backend/tests/test_deploy_units.py` | 15 tests sobre las units | — |
+
+```mermaid
+flowchart TD
+    BOOT([Arranca el VPS]) --> NET[network-online.target]
+    NET --> API[tradingbot-api.service<br/>uvicorn 127.0.0.1:8123]
+    NET --> SCAN[tradingbot-scanner.service<br/>scanner_job.py]
+    API -. After= .-> SCAN
+
+    ENV[/backend/.env<br/>chmod 600/] -->|EnvironmentFile=| API
+    ENV -->|EnvironmentFile=| SCAN
+
+    SCAN --> TG{{Telegram}}
+    API --> DB[(simulador.db)]
+    SCAN --> DB
+
+    CAIDA([Se cae el proceso]) -->|Restart=always · 10 s| API
+    CAIDA -->|Restart=always · 10 s| SCAN
+```
+
+**Archivos tocados:** `deploy/tradingbot-api.service` (nuevo),
+`deploy/tradingbot-scanner.service` (nuevo), `backend/tests/test_deploy_units.py`
+(nuevo), `README.md` (sección nueva "Correr 24/7 en el VPS (systemd)" + 3 filas
+de estado actualizadas), `CLAUDE.md` (`deploy/` en la estructura de carpetas).
+
+### Decisiones
+
+> [!warning] La API queda en `127.0.0.1`, no en `0.0.0.0`
+> `app/main.py` **no tiene autenticación de ningún tipo** y su CORS es
+> `allow_origins=["*"]`. Bindeada a `0.0.0.0` en un VPS con IP pública, cualquiera
+> podría leer `/iol/saldo` — saldo y tenencia reales de la cuenta comitente — y
+> cargar o borrar operaciones. La unit escucha solo en loopback y el README
+> documenta el túnel SSH (`ssh -L 8123:127.0.0.1:8123`) como forma de llegarle
+> desde afuera. Exponerla de verdad necesita reverse proxy con TLS **y** auth, y
+> eso no es parte de esta tarea (la tarea lo pone explícitamente fuera de alcance).
+
+> [!note] Credenciales por `EnvironmentFile=`, nunca por `Environment=`
+> `systemctl show <unit>` imprime todo lo que esté en `Environment=`, y eso queda
+> en el journal. En `Environment=` solo hay `TZ` y `PYTHONUNBUFFERED`; el `.env`
+> con `chmod 600` entra por `EnvironmentFile=`. Es la misma regla que ya estaba
+> escrita en la sección de credenciales del README (Tarea 8.3).
+
+> [!note] `TZ=America/Argentina/Buenos_Aires` en las dos units
+> El chequeo de rueda BYMA se hace en ART por código, pero `schedule` dispara el
+> reporte semanal con el reloj del proceso (`friday at 17:30`). En un VPS en UTC,
+> sin esta línea, el reporte saldría a las 14:30 ART. La unit lo fija por las
+> dudas, y el README igual pide `timedatectl set-timezone` para el server entero.
+
+> [!note] `ProtectSystem=full` y no `strict`
+> `strict` deja todo el disco en solo lectura y obligaría a enumerar a mano las
+> rutas de `simulador.db` y `backend/data/` en `ReadWritePaths=`. Un
+> `ReadWritePaths` mal puesto rompe el servicio de una forma difícil de
+> diagnosticar (el proceso arranca y falla al primer write). `full` deja `/usr`,
+> `/boot` y `/etc` en solo lectura, que es el 90% del beneficio sin ese riesgo.
+
+> [!note] `PYTHONUNBUFFERED=1`
+> Sin esto Python bufferea stdout y `journalctl -f` no muestra nada hasta que se
+> llena el buffer — inservible para mirar los ciclos de escaneo en vivo.
+
+### Cómo se probó
+
+**1. Suite completa offline (416 tests, incluidos los 15 nuevos):**
+
+```
+$ ./venv/Scripts/python.exe -m pytest -m "not network" -q
+416 passed, 8 deselected, 71 warnings in 9.61s
+```
+
+**2. Los 15 tests nuevos de las units, en detalle:**
+
+```
+$ ./venv/Scripts/python.exe -m pytest tests/test_deploy_units.py -v
+tests/test_deploy_units.py::test_las_units_existen PASSED                [  6%]
+tests/test_deploy_units.py::test_secciones_obligatorias[tradingbot-api.service] PASSED [ 13%]
+tests/test_deploy_units.py::test_secciones_obligatorias[tradingbot-scanner.service] PASSED [ 20%]
+tests/test_deploy_units.py::test_reinicia_solo[tradingbot-api.service] PASSED [ 26%]
+tests/test_deploy_units.py::test_reinicia_solo[tradingbot-scanner.service] PASSED [ 33%]
+tests/test_deploy_units.py::test_execstart_absoluto_y_en_una_linea[tradingbot-api.service] PASSED [ 40%]
+tests/test_deploy_units.py::test_execstart_absoluto_y_en_una_linea[tradingbot-scanner.service] PASSED [ 46%]
+tests/test_deploy_units.py::test_corre_sin_privilegios[tradingbot-api.service] PASSED [ 53%]
+tests/test_deploy_units.py::test_corre_sin_privilegios[tradingbot-scanner.service] PASSED [ 60%]
+tests/test_deploy_units.py::test_credenciales_por_archivo_nunca_embebidas[tradingbot-api.service] PASSED [ 66%]
+tests/test_deploy_units.py::test_credenciales_por_archivo_nunca_embebidas[tradingbot-scanner.service] PASSED [ 73%]
+tests/test_deploy_units.py::test_zona_horaria_argentina[tradingbot-api.service] PASSED [ 80%]
+tests/test_deploy_units.py::test_zona_horaria_argentina[tradingbot-scanner.service] PASSED [ 86%]
+tests/test_deploy_units.py::test_la_api_no_escucha_hacia_afuera PASSED   [ 93%]
+tests/test_deploy_units.py::test_el_scanner_corre_el_job_correcto PASSED [100%]
+
+============================= 15 passed in 0.07s ==============================
+```
+
+### Pendiente / notas
+
+> [!warning] Las units NO se instalaron todavía — el criterio de aceptación sigue abierto
+> La Tarea 10.3 pide `systemctl status` en `active (running)` **después de un
+> reinicio del servidor**, y eso solo se puede comprobar en el VPS. Los tests de
+> arriba validan que los archivos son correctos, no que el servicio levanta:
+> `systemd-analyze verify` no existe en Windows. Falta correr los 5 pasos de
+> instalación del README en el servidor y pegar acá la salida real del
+> `systemctl status`.
+
+> [!note] Qué ajustar si el layout del VPS es otro
+> Las units asumen usuario `tradingbot` y ruta
+> `/opt/tradingbot/simuladorinversiones`. El README trae un `sed` que reemplaza
+> usuario y ruta de una sola vez, antes de copiarlas a `/etc/systemd/system/`.
+
+> [!todo] Próximo paso
+> Tarea 10.2 👤 (terminar de preparar el VPS: zona horaria, NTP, clonar el repo,
+> crear el `.env`) e instalar estas units. Con eso arranca el período de
+> validación de la Tarea 10.4 👤 — 3 a 4 semanas en modo solo sugerir, con
+> `MODO_FANTASMA=true`.

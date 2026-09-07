@@ -1,0 +1,55 @@
+# Tarea 10.3 — API FastAPI del simulador, bajo systemd.
+#
+# Instalación y comandos en README.md, sección "Correr 24/7 en el VPS (systemd)".
+#
+# Hay exactamente DOS cosas que cambiar si tu layout es distinto:
+#   1. User=/Group=        el usuario sin privilegios que corre el bot
+#   2. WorkingDirectory=   y las rutas de EnvironmentFile= y ExecStart=
+# El README trae un `sed` que las reemplaza las tres de una.
+
+[Unit]
+Description=Simulador Inversiones IA - API FastAPI
+Documentation=https://github.com/ulisao/simuladorinversiones
+# La API consulta yfinance, IOL y SEC apenas arranca: sin red no tiene sentido.
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+Type=exec
+User=tradingbot
+Group=tradingbot
+WorkingDirectory=/opt/tradingbot/simuladorinversiones/backend
+
+# Las credenciales entran por archivo, NUNCA por Environment= ni por ExecStart=:
+# lo que va en la unit se lee con `systemctl show` y queda en el journal.
+# El .env se crea a mano en el servidor con chmod 600 (ver README).
+EnvironmentFile=/opt/tradingbot/simuladorinversiones/backend/.env
+
+# El chequeo de rueda BYMA se hace en ART por código, pero `schedule` (y los logs
+# del journal) usan el reloj del proceso. Con esto los dos coinciden aunque el
+# servidor esté en UTC.
+Environment=TZ=America/Argentina/Buenos_Aires
+# Sin esto Python bufferea stdout y `journalctl -f` no muestra nada hasta que
+# se llena el buffer.
+Environment=PYTHONUNBUFFERED=1
+
+# OJO: 127.0.0.1 a propósito. La API no tiene autenticación y tiene CORS abierto
+# (allow_origins=["*"]). Ver el warning del README antes de cambiar esto por
+# 0.0.0.0 — expone /iol/saldo y la carga de operaciones a todo internet.
+ExecStart=/opt/tradingbot/simuladorinversiones/backend/venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8123
+
+Restart=always
+RestartSec=10
+
+# Endurecimiento moderado. Se usa ProtectSystem=full y no `strict` a propósito:
+# `strict` deja todo el disco en solo lectura y habría que enumerar a mano las
+# rutas de simulador.db y backend/data/ — un ReadWritePaths mal puesto rompe el
+# servicio de una forma difícil de diagnosticar.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

@@ -39,6 +39,9 @@ frontend/                Next.js (App Router) + Tailwind
   app/                   page.tsx (Dashboard), simulador/, senales/, config/
   components/            Nav, MetricCard, NewTradeForm, CloseTradeRow
   lib/                   api.ts (cliente HTTP), types.ts, format.ts
+deploy/                  Units systemd para el VPS (Tarea 10.3)
+  tradingbot-api.service       uvicorn en 127.0.0.1:8123
+  tradingbot-scanner.service   scanner_job.py, escaneo 24/7
 docs/                    Manuales originales (.docx) + parametros-riesgo.md
   specs-txt/             Texto plano extraído de los .docx, para consulta rápida
 ```
