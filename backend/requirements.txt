@@ -2,7 +2,7 @@
 fastapi==0.115.6
 uvicorn[standard]==0.32.1
 sqlalchemy==2.0.36
-pydantic==2.10.3
+pydantic>=2.11,<3
 python-dotenv==1.2.3
 
 # --- Datos de mercado y cálculo técnico (Fases 2, 3, 5 y 9) ---
@@ -22,6 +22,16 @@ pytz==2026.3.post1
 feedparser==6.0.14
 transformers==5.16.1
 torch==2.13.0
+
+# --- Señal por RSI (Tarea 3.7) ---
+# La tarea pide `pandas-ta`, pero NO se puede instalar acá: arrastra `numba`,
+# que hoy no soporta Python 3.14 (el pip install falla al compilar). El RSI se
+# calcula con pandas puro en app/rsi_signal.py, igual que el ATR y las EMAs de
+# technical_filters.py. Cero dependencias nuevas.
+
+# --- Alertas por Telegram (Fase 7) y automatización 24/7 (Fases 10 y 12) ---
+# `requests` ya está arriba: es el único cliente HTTP que usa notifications.py.
+schedule==1.2.2
 
 # --- Testing ---
 pytest==9.1.1

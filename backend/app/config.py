@@ -38,14 +38,62 @@ IOL_API_URL = os.getenv("IOL_API_URL", "https://api.invertironline.com")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN", "")
 TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID", "")
 
-GOOGLE_CREDENTIALS_PATH = os.getenv("GOOGLE_CREDENTIALS_PATH", "")
 
-
-# ---------- Capital y tamaño de posición ----------
+# ---------- Capital y tamaño de posición (Tarea 0.1) ----------
 
 CAPITAL_TOTAL = _env_float("CAPITAL_TOTAL", 100_000.0)      # ARS
 MAX_POSICIONES = int(_env_float("MAX_POSICIONES", 2))
-MONTO_POR_POSICION = _env_float("MONTO_POR_POSICION", 50_000.0)
+
+# Cupo de capital de cada estrategia. Tienen que sumar 1.0: son una partición
+# del capital, no dos presupuestos independientes.
+#
+# El swing técnico (Fases 3-4) ya tiene track record en paper trading; el de
+# consenso institucional 13F (Tarea 5.5) todavía no. La repartición decidida es
+# 40/60 — el ejemplo que trae el plan desde el chat de Gemini.
+CUPO_SWING = _env_float("CUPO_SWING", 0.40)
+CUPO_SMART_MONEY = _env_float("CUPO_SMART_MONEY", 0.60)
+
+# Porcentaje máximo del cupo de una estrategia que puede ir a un solo activo.
+#
+# ⚠ Decisión consciente, fuera del rango que nombra el plan. La Tarea 0.1 sugiere
+# 15-20% (manuales) o 10% (Gemini) sobre el capital TOTAL; acá se resolvió dejar
+# el 50% que ya estaba. Para que el número conviva con los cupos, se aplica
+# sobre el cupo de cada estrategia y no sobre el capital total: con 50% del
+# capital total ($50.000) una sola posición de swing se pasaría de su propio
+# cupo ($40.000), que es aritméticamente imposible.
+#
+# Resultado con los valores de hoy:
+#   swing        cupo $40.000 → $20.000 por posición × 2 = $40.000
+#   smart money  cupo $60.000 → $30.000 por posición
+LIMITE_POR_OPERACION = _env_float("LIMITE_POR_OPERACION", 0.50)
+
+# Piso de saldo disponible por debajo del cual no se abren posiciones nuevas
+# (lo pide la Tarea 11.2). Con menos que esto, el costo fijo de comisiones se
+# come cualquier ganancia razonable de la operación.
+SALDO_MINIMO_OPERAR = _env_float("SALDO_MINIMO_OPERAR", 10_000.0)
+
+ESTRATEGIA_SWING = "SWING"
+ESTRATEGIA_SMART_MONEY = "SMART_MONEY"
+
+CUPOS_POR_ESTRATEGIA = {
+    ESTRATEGIA_SWING: CUPO_SWING,
+    ESTRATEGIA_SMART_MONEY: CUPO_SMART_MONEY,
+}
+
+
+def cupo_de(estrategia: str) -> float:
+    """Capital en ARS asignado a una estrategia."""
+    return CAPITAL_TOTAL * CUPOS_POR_ESTRATEGIA.get(estrategia, 0.0)
+
+
+def monto_por_posicion(estrategia: str = ESTRATEGIA_SWING) -> float:
+    """Monto máximo de una sola posición dentro del cupo de su estrategia."""
+    return cupo_de(estrategia) * LIMITE_POR_OPERACION
+
+
+# Compatibilidad: el monto de una posición de swing, que es lo que significaba
+# `MONTO_POR_POSICION` antes de que existieran los cupos.
+MONTO_POR_POSICION = monto_por_posicion(ESTRATEGIA_SWING)
 
 
 # ---------- Gestión de riesgo por operación ----------
@@ -73,14 +121,93 @@ RVOL_ACUMULACION_BONOS = 1.8
 INSIDERS_MIN_FILINGS = 2
 
 
+# ---------- Consenso institucional 13F (Tareas 5.3, 5.4 y 5.5) ----------
+# A diferencia del RVOL y los Form 4 de arriba, esto NO es contexto: es una
+# estrategia completa, con su propio cupo de capital, que genera y cierra
+# operaciones por sí sola.
+
+# Fondos que se siguen, por CIK de SEC EDGAR. Lista corta y curada a propósito:
+# cada fondo son dos filings que bajar y parsear, y el consenso pierde sentido
+# si se sigue a demasiados (todos terminan tocando los mismos papeles grandes).
+FONDOS_13F = {
+    "0001067983": "Berkshire Hathaway",
+    "0001350694": "Bridgewater Associates",
+    "0001037389": "Renaissance Technologies",
+    "0001167483": "Tiger Global Management",
+    "0001061768": "Baupost Group",
+}
+
+# Cuántos fondos distintos tienen que coincidir para generar una señal. Seguir a
+# uno solo es seguir a una persona; el consenso es la señal.
+SMART_MIN_CONSENSO = 2
+
+# Peso mínimo de la posición en la cartera del fondo. Por debajo de esto, la
+# posición es ruido para el fondo y no dice nada sobre su convicción.
+SMART_MIN_PESO_CARTERA = 0.01   # 1,0% de la cartera del fondo
+
+# Si el precio actual ya se despegó más que esto del precio promedio al que
+# entró el fondo, la señal llegó tarde. Los 13F salen con hasta 45 días de
+# rezago legal: sin este filtro se compraría sistemáticamente arriba.
+SMART_MAX_DELAY_SUBA = 0.10     # +10%
+
+# User-Agent obligatorio para la API de SEC EDGAR: rechaza pedidos sin uno que
+# identifique a quien consulta. Se puede pisar desde el entorno.
+SEC_USER_AGENT = os.getenv(
+    "SEC_USER_AGENT", "Simulador Inversiones IA (contacto: ulisessbaretta@gmail.com)"
+)
+
+# Dónde se guardan los filings ya descargados, para poder comparar un trimestre
+# contra el anterior. Va fuera de git (ver .gitignore).
+DIR_DATOS_13F = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "data", "13f"
+)
+
+
 # ---------- Renta fija ----------
 
 SPREAD_BID_ASK_MAX = 0.006         # 0,6% de spread bid/ask máximo en CI
 
 
-# ---------- Kill switch de ejecución real ----------
+# ---------- Señal alternativa por RSI (Tarea 3.7) ----------
+# Fuente de señal paralela a los 7 filtros, deliberadamente mucho más simple,
+# para comparar cuál rinde mejor en paper trading. Conviven: ninguna reemplaza
+# a la otra.
 
-EJECUCION_REAL_HABILITADA = _env_bool("EJECUCION_REAL_HABILITADA", False)
+RSI_PERIODO = 14
+RSI_SOBREVENTA = 30.0              # RSI por debajo de esto dispara la señal
+
+# Spread bid/ask máximo tolerado para considerar líquido a un CEDEAR. Más
+# amplio que el de bonos porque el mercado de CEDEARs es menos profundo.
+#
+# OJO: hoy no hay de dónde sacar el spread real — yfinance da el precio de la
+# acción en EE.UU., no el libro del CEDEAR en BYMA. El chequeo está escrito y
+# probado, pero es NO BLOQUEANTE hasta que `IOLClient` (Fase 8) traiga bid/ask
+# de verdad. Ver `rsi_signal.chequear_liquidez`.
+LIQUIDEZ_SPREAD_MAX = 0.010
+
+
+# ---------- Kill switch de ejecución real ----------
+#
+# `MODO_FANTASMA=true` (el default) significa que NUNCA sale una orden real:
+# el sistema escanea, notifica y registra igual que si operara, pero no llama a
+# la API de IOL. Recién con `MODO_FANTASMA=false` se opera de verdad.
+#
+# Antes esto se llamaba `EJECUCION_REAL_HABILITADA` (con la lógica invertida).
+# El plan (Tarea 11.2) pide unificar en un solo nombre para no terminar con dos
+# variables haciendo lo mismo. La variable vieja ya no se lee: si quedó en algún
+# `.env` se avisa por consola, porque ignorarla en silencio sería peligroso.
+
+MODO_FANTASMA = _env_bool("MODO_FANTASMA", True)
+
+if os.getenv("EJECUCION_REAL_HABILITADA") is not None:
+    import warnings
+
+    warnings.warn(
+        "EJECUCION_REAL_HABILITADA quedó obsoleta y se está ignorando. "
+        "Usá MODO_FANTASMA (true = no se envía ninguna orden real, es el default). "
+        f"Valor efectivo ahora: MODO_FANTASMA={MODO_FANTASMA}.",
+        stacklevel=2,
+    )
 
 
 # ---------- Universo de CEDEARs líquidos en BYMA ----------
@@ -101,6 +228,30 @@ TICKERS_BYMA = [
 
 # Benchmark contra el que se mide el régimen de mercado y la fuerza relativa.
 TICKER_BENCHMARK = "SPY"
+
+
+# ---------- Mapeo CUSIP → ticker (Tarea 5.3) ----------
+# Los 13F identifican cada posición por CUSIP, no por ticker. No existe una
+# fuente pública gratuita de CUSIP→ticker (el mapeo oficial es un producto pago
+# de CUSIP Global Services), así que se usa un mapeo manual acotado al universo
+# habilitado, que es exactamente lo que sugiere la Tarea 5.3.
+#
+# Verificados contra filings 13F reales: el nombre del emisor que trae el filing
+# coincide con el ticker. Los marcados con ✓ se confirmaron en el 13F de
+# Berkshire del trimestre 2026-06-30.
+CUSIP_A_TICKER = {
+    "037833100": "AAPL",   # ✓ APPLE INC
+    "191216100": "KO",     # ✓ COCA COLA CO
+    "02079K305": "GOOGL",  # ✓ ALPHABET INC (clase A)
+    "02079K107": "GOOG",   # ✓ ALPHABET INC (clase C)
+    "67066G104": "NVDA",   # NVIDIA CORP
+    "58733R102": "MELI",   # MERCADOLIBRE INC
+    "594918104": "MSFT",   # MICROSOFT CORP
+    "023135106": "AMZN",   # AMAZON COM INC
+    "88160R101": "TSLA",   # TESLA INC
+    "78462F103": "SPY",    # SPDR S&P 500 ETF TRUST
+    "46090E103": "QQQ",    # INVESCO QQQ TRUST
+}
 
 
 # ---------- Universo de bonos soberanos y provinciales ----------
@@ -146,6 +297,15 @@ SALIDA_TP2_PCT = 0.080               # TP2 techo: +8,0%, cierra el remanente
 # Cierre preventivo 10 minutos antes de la campana de BYMA (17:00 hs): si queda
 # posición con TP1 cobrado, se liquida a mercado. Cero riesgo overnight.
 SALIDA_HORA_CIERRE_PREVENTIVO = _time(16, 50, 0)
+
+# Vencimiento por tiempo (el `SWING_MAX_DIAS` del plan, Tarea 3.5). Red de
+# seguridad contra posiciones "dormidas": si a los N días corridos desde la
+# compra no tocó ni el stop-loss inicial ni el TP1, se cierra a mercado igual.
+# No gana ni pierde, pero inmoviliza capital y cupo de posiciones.
+#
+# Son días CORRIDOS, no ruedas: el capital está inmovilizado también el fin de
+# semana, así que contar ruedas subestimaría el costo de oportunidad.
+SALIDA_SWING_MAX_DIAS = 10
 
 # Zona horaria de la rueda local, en nombre IANA (la resuelve `pytz` en el módulo
 # que la usa, para no meter esa dependencia acá).

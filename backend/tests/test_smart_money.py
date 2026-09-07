@@ -260,3 +260,32 @@ def test_sec_form4_real_de_aapl():
     tiene_insiders, detalle = smart_money.check_sec_form4_cluster("AAPL")
     assert isinstance(detalle, str) and detalle
     assert isinstance(tiene_insiders, bool)
+
+
+# ---------- Un bono sin datos no puede afirmar acumulación (hallazgo de la 9.4) ----------
+
+
+def test_un_bono_sin_historico_no_marca_acumulacion(monkeypatch):
+    """`check_bond_unusual_volume` devuelve True para decir "no bloquees".
+
+    Ese flag no es una afirmación sobre el mercado: mapearlo a `es_acumulacion`
+    marcaba acumulación en TODOS los bonos, que casi nunca tienen histórico en
+    Yahoo. Sin datos se informa `False`, no `True`.
+    """
+    monkeypatch.setattr(
+        smart_money, "check_bond_unusual_volume", lambda t: (True, 1.0)
+    )
+
+    contexto = smart_money.contexto_smart_money("AL30.BA", es_bono=True)
+
+    assert contexto["rvol"] == 1.0
+    assert contexto["es_acumulacion"] is False
+
+
+def test_un_bono_con_volumen_alto_si_marca_acumulacion(monkeypatch):
+    alto = config.RVOL_ACUMULACION_BONOS + 0.5
+    monkeypatch.setattr(
+        smart_money, "check_bond_unusual_volume", lambda t: (True, alto)
+    )
+
+    assert smart_money.contexto_smart_money("AL30.BA", es_bono=True)["es_acumulacion"] is True

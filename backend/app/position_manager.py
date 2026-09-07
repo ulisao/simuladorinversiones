@@ -10,8 +10,14 @@ manejada tick a tick sobre una posición ya abierta:
    El stop es monótono creciente: solo sube, nunca baja.
 4. **TP2 techo (+8,0%)** o **cierre preventivo a las 16:50 hs ART**, lo que llegue
    primero.
+5. **Vencimiento por tiempo (10 días corridos)**: red de seguridad contra la
+   posición que no se mueve. Si nunca tocó ni el SL inicial ni el TP1, se cierra
+   igual — ni gana ni pierde, pero inmoviliza capital y ocupa un cupo de
+   `MAX_POSICIONES`.
 
 Referencia de spec: `Pasar_ulises_31_de_agosto.docx`, secciones 1, 2, 3 y 5.
+El vencimiento por tiempo no está en ese documento: lo agrega la Tarea 3.5 del
+plan (`tareas-desarrollo.md`) como `SWING_MAX_DIAS`.
 
 Diferencias deliberadas contra el código de la spec:
 
@@ -35,7 +41,7 @@ Este módulo es puro: no habla con la red ni con la base, y `on_tick` acepta un
 `timestamp` inyectable para poder probar la regla de las 16:50 sin depender de la
 hora real.
 """
-from datetime import datetime, time
+from datetime import date, datetime, time
 from typing import Any, Dict, Optional
 
 import pytz
@@ -54,8 +60,10 @@ MOTIVO_STOP_INICIAL = "INITIAL_STOP_LOSS_HIT"
 MOTIVO_TP1_PARCIAL = "TP1_PARTIAL_50PCT"
 MOTIVO_TP2_TECHO = "TP2_CEILING_HIT"
 MOTIVO_TRAILING = "TRAILING_STOP_1.2PCT_HIT"
+MOTIVO_VENCIMIENTO = "SWING_TIME_EXPIRY"
 
 NOTA_CIERRE_PREVENTIVO = "Cierre preventivo para evitar Gap bajista nocturno"
+NOTA_VENCIMIENTO = "Posición dormida: ni SL ni TP1 en el plazo máximo"
 
 
 class PositionManager:
@@ -80,6 +88,10 @@ class PositionManager:
         market_close_cutoff: hora ART del cierre preventivo. Default
             `config.SALIDA_HORA_CIERRE_PREVENTIVO`.
         tz: nombre IANA de la zona horaria. Default `config.TZ_BYMA`.
+        entry_date: fecha de compra, para el vencimiento por tiempo. Si es None
+            la regla queda desactivada (una posición sin fecha no puede vencer).
+        max_dias: días corridos antes de dar la posición por vencida. Default
+            `config.SALIDA_SWING_MAX_DIAS`.
 
     Raises:
         ValueError: si `entry_price` o `total_qty` no son positivos.
@@ -106,6 +118,8 @@ class PositionManager:
         tp2_pct: Optional[float] = None,
         market_close_cutoff: Optional[time] = None,
         tz: Optional[str] = None,
+        entry_date: Optional[date] = None,
+        max_dias: Optional[int] = None,
     ) -> None:
         entry_price = float(entry_price)
         if entry_price <= 0:
@@ -144,6 +158,12 @@ class PositionManager:
             else market_close_cutoff
         )
 
+        # ---------- Vencimiento por tiempo (Tarea 3.5) ----------
+        self.entry_date = entry_date
+        self.max_dias = (
+            config.SALIDA_SWING_MAX_DIAS if max_dias is None else int(max_dias)
+        )
+
         # ---------- Estado interno ----------
         self.is_tp1_hit = False
         self.is_closed = False
@@ -165,6 +185,24 @@ class PositionManager:
         if timestamp.tzinfo is None:
             return self.tz.localize(timestamp).time()
         return timestamp.astimezone(self.tz).time()
+
+    def _fecha_art(self, timestamp: Optional[datetime]) -> date:
+        """Fecha del tick en zona ART, con el mismo criterio que `_hora_art`."""
+        if timestamp is None:
+            return datetime.now(self.tz).date()
+        if timestamp.tzinfo is None:
+            return self.tz.localize(timestamp).date()
+        return timestamp.astimezone(self.tz).date()
+
+    def _vencida(self, timestamp: Optional[datetime]) -> bool:
+        """True si la posición pasó `max_dias` corridos desde la compra.
+
+        Sin `entry_date` la regla no aplica: preferimos no cerrar nada antes que
+        inventar una fecha de compra.
+        """
+        if self.entry_date is None or self.max_dias <= 0:
+            return False
+        return (self._fecha_art(timestamp) - self.entry_date).days >= self.max_dias
 
     def _rendimiento_pct(self, current_price: float) -> float:
         """Rendimiento bruto del precio contra la entrada, en porcentaje."""
@@ -196,9 +234,11 @@ class PositionManager:
         El orden de prioridad es el de la spec y no es intercambiable:
 
         1. Cierre preventivo 16:50 hs ART (solo si ya se cobró el TP1).
-        2. Si todavía no tocó TP1: primero el SL inicial, después el TP1.
+        2. Si todavía no tocó TP1: primero el SL inicial, después el TP1, y
+           recién al final el vencimiento por tiempo (Tarea 3.5).
         3. Si ya tocó TP1: primero se actualiza el pico y se sube el stop, después
-           el TP2 techo, y por último el trailing.
+           el TP2 techo, y por último el trailing. Una posición que ya cobró el
+           parcial no vence por tiempo: la gestiona el trailing.
 
         Args:
             current_price: último precio observado.
@@ -266,6 +306,14 @@ class PositionManager:
                     "new_stop_price": self.current_stop_price,
                 }
 
+            # 1.3 Vencimiento por tiempo. Va ÚLTIMO del caso 1 a propósito: si en
+            # este mismo tick el precio toca el SL o el TP1, mandan esas reglas,
+            # que son la estrategia real. Esto solo barre lo que quedó dormido.
+            if self._vencida(timestamp):
+                return self._liquidar(
+                    current_price, MOTIVO_VENCIMIENTO, note=NOTA_VENCIMIENTO
+                )
+
         # -------------------------------------------------------------
         # CASO 2: post-TP1 (gestión dinámica del trailing 1,2%).
         # -------------------------------------------------------------
@@ -311,6 +359,8 @@ class PositionManager:
             "trailing_pullback": self.trailing_pullback,
             "min_guaranteed_pct": self.min_guaranteed_pct,
             "tp2_pct": self.tp2_pct,
+            "entry_date": self.entry_date,
+            "max_dias": self.max_dias,
         }
 
     @classmethod
@@ -344,6 +394,8 @@ class PositionManager:
             trailing_pullback=estado.get("trailing_pullback"),
             min_guaranteed_pct=estado.get("min_guaranteed_pct"),
             tp2_pct=estado.get("tp2_pct"),
+            entry_date=estado.get("entry_date"),
+            max_dias=estado.get("max_dias"),
         )
 
         manager.is_tp1_hit = bool(estado.get("is_tp1_hit", False))

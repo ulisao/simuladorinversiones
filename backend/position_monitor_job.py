@@ -35,7 +35,7 @@ from typing import Optional
 
 import pytz
 
-from app import crud
+from app import crud, notifications
 from app.config import TZ_BYMA
 from app.database import SessionLocal
 from app.market_data import MarketDataError, get_last_price
@@ -76,13 +76,17 @@ def intervalo_actual(momento: Optional[datetime] = None) -> int:
 
 
 def _notificar(mensaje: str) -> None:
-    """Aviso de cada acción del gestor.
+    """Aviso de cada acción del gestor: al log y a Telegram (Tarea 7.2).
 
-    Hoy solo loguea. La Tarea 7.1 (Telegram) todavía no está hecha porque falta
-    el token del bot; cuando exista, acá va el `send_telegram(mensaje)` y no hay
-    que tocar nada más de este archivo.
+    `send_telegram` nunca lanza: si el bot no está configurado o Telegram falla,
+    devuelve el motivo y el barrido sigue. Va en texto plano a propósito — los
+    motivos del gestor traen guiones bajos (`TP1_PARTIAL_50PCT`) que romperían
+    cualquier parse_mode.
     """
     logger.info(mensaje)
+    resultado = notifications.send_telegram(mensaje)
+    if not resultado["enviado"]:
+        logger.warning("No se pudo notificar por Telegram: %s", resultado["motivo"])
 
 
 def _gestor_de(trade, estado_guardado: Optional[dict]) -> PositionManager:
@@ -91,6 +95,10 @@ def _gestor_de(trade, estado_guardado: Optional[dict]) -> PositionManager:
         "symbol": trade.ticker,
         "entry_price": trade.precio_entrada,
         "total_qty": trade.cantidad,
+        # Habilita el vencimiento por tiempo (Tarea 3.5). Sale del trade en cada
+        # barrido, no de `PositionState`: la fecha de compra ya está en la base y
+        # duplicarla en la tabla de estado solo daría dos fuentes de verdad.
+        "entry_date": trade.fecha_compra,
     }
     if estado_guardado:
         base.update(estado_guardado)

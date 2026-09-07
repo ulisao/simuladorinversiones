@@ -6,6 +6,13 @@ import type { TradeCreateInput } from "@/lib/types";
 
 const TIPOS = ["CEDEAR", "ACCION", "BONO"];
 
+// Cada estrategia tiene su propio cupo de capital y su propia fila en el
+// dashboard (Tarea 5.5), así que hay que saber con cuál se abrió la posición.
+const ESTRATEGIAS = [
+  { valor: "SWING", etiqueta: "Swing técnico" },
+  { valor: "SMART_MONEY", etiqueta: "Smart Money (13F)" },
+];
+
 function today(): string {
   return new Date().toISOString().slice(0, 10);
 }
@@ -30,9 +37,13 @@ export default function NewTradeForm({
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [buscandoPrecio, setBuscandoPrecio] = useState(false);
+  // Tarea 2.1: el precio de mercado sale de yfinance (acción subyacente en USD),
+  // no del CEDEAR en pesos. Se avisa apenas se usa el botón.
+  const [avisoPrecio, setAvisoPrecio] = useState<string | null>(null);
   const [form, setForm] = useState<TradeCreateInput>({
     ticker: prefill?.ticker ?? "",
     tipo: "CEDEAR",
+    estrategia: "SWING",
     fecha_compra: today(),
     cantidad: 0,
     precio_entrada: prefill?.precio_entrada ?? 0,
@@ -45,8 +56,9 @@ export default function NewTradeForm({
     setError(null);
     setBuscandoPrecio(true);
     try {
-      const { precio } = await api.getPrecioMercado(ticker);
+      const { precio, advertencia } = await api.getPrecioMercado(ticker);
       setForm((f) => ({ ...f, precio_entrada: precio }));
+      setAvisoPrecio(advertencia);
     } catch (err) {
       // El backend devuelve 404 con un detail en español para ticker inválido.
       const bruto = err instanceof Error ? err.message : String(err);
@@ -70,6 +82,7 @@ export default function NewTradeForm({
       setForm({
         ticker: "",
         tipo: "CEDEAR",
+        estrategia: "SWING",
         fecha_compra: today(),
         cantidad: 0,
         precio_entrada: 0,
@@ -129,6 +142,22 @@ export default function NewTradeForm({
       </div>
       <div className="col-span-1">
         <label className="mb-1 block text-xs font-medium text-neutral-500">
+          Estrategia
+        </label>
+        <select
+          value={form.estrategia}
+          onChange={(e) => setForm({ ...form, estrategia: e.target.value })}
+          className="w-full rounded-md border border-neutral-300 px-2 py-1.5 text-sm dark:border-neutral-700 dark:bg-neutral-800"
+        >
+          {ESTRATEGIAS.map((e) => (
+            <option key={e.valor} value={e.valor}>
+              {e.etiqueta}
+            </option>
+          ))}
+        </select>
+      </div>
+      <div className="col-span-1">
+        <label className="mb-1 block text-xs font-medium text-neutral-500">
           Fecha compra
         </label>
         <input
@@ -173,6 +202,11 @@ export default function NewTradeForm({
         >
           {buscandoPrecio ? "Buscando…" : "Usar precio de mercado"}
         </button>
+        {avisoPrecio && (
+          <p className="mt-1 text-xs text-amber-700 dark:text-amber-400">
+            {avisoPrecio}
+          </p>
+        )}
       </div>
       <div className="col-span-1">
         <label className="mb-1 block text-xs font-medium text-neutral-500">

@@ -271,7 +271,14 @@ def contexto_smart_money(ticker: str, es_bono: bool = False) -> dict:
           anterior, incluido el motivo cuando la consulta falló.
     """
     if es_bono:
-        es_acumulacion, rvol = check_bond_unusual_volume(ticker)
+        # `check_bond_unusual_volume` devuelve True cuando NO hay datos, con el
+        # sentido de "no bloquees el escaneo". Eso NO es una afirmación de que
+        # haya acumulación institucional: los bonos argentinos casi nunca tienen
+        # histórico en Yahoo, así que usar ese flag acá marcaba acumulación en
+        # el universo entero con RVOL 1.0. Se deriva del RVOL contra el umbral,
+        # que sin datos da False — "no sé" se informa como "no", no como "sí".
+        _, rvol = check_bond_unusual_volume(ticker)
+        es_acumulacion = rvol >= config.RVOL_ACUMULACION_BONOS
         insiders_detectados = False
         insiders_detalle = "No aplica: la SEC solo publica Form 4 de emisores de EE.UU."
     else:

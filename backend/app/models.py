@@ -37,6 +37,14 @@ class Trade(Base):
     precio_salida = Column(Float, nullable=True)
     senal = Column(String, nullable=True, default="")  # motivo / señal IA, ej. "Take-Profit +7.6%"
 
+    # Con qué estrategia se abrió la operación (Tarea 5.5). Cada una tiene su
+    # propio cupo de capital (`config.CUPOS_POR_ESTRATEGIA`), así que el
+    # dashboard tiene que poder separarlas: mezclarlas en un solo número haría
+    # imposible saber cuál de las dos rinde.
+    estrategia = Column(
+        String, nullable=False, index=True, server_default="SWING", default="SWING"
+    )
+
 
 # ---------- Gestión de salidas (PositionManager) ----------
 

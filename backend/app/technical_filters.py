@@ -102,6 +102,47 @@ def calculate_atr(df: pd.DataFrame, period: Optional[int] = None) -> pd.Series:
     return true_range.rolling(periodo).mean()
 
 
+def calcular_stop_y_objetivo(precio_actual: float, atr: float) -> dict:
+    """Stop-loss por ATR y take-profit con el ratio R/B, con el tope de config.
+
+    Única implementación de la regla de riesgo por operación. La usan los tres
+    generadores de señal (los 7 filtros, el RSI de la Tarea 3.7 y el consenso
+    13F de la Tarea 5.4): cambia el disparador de cada señal, nunca la gestión
+    del riesgo.
+
+    Stop = precio − `ATR_MULTIPLICADOR` × ATR. Si eso deja el riesgo por encima
+    de `STOP_LOSS_TOLERANCIA_PCT`, se recorta a `STOP_LOSS_MAX_PCT`.
+
+    Returns:
+        `{"stop_loss", "take_profit", "pct_riesgo", "stop_recortado"}`.
+        `pct_riesgo` va en fracción (0.03), no en porcentaje.
+
+    Raises:
+        ValueError: si el precio o el ATR no son positivos.
+    """
+    precio_actual = float(precio_actual)
+    atr = float(atr)
+    if precio_actual <= 0:
+        raise ValueError(f"El precio tiene que ser positivo, llegó {precio_actual!r}.")
+    if atr <= 0:
+        raise ValueError(f"El ATR tiene que ser positivo, llegó {atr!r}.")
+
+    stop_loss = precio_actual - (config.ATR_MULTIPLICADOR * atr)
+    pct_riesgo = (precio_actual - stop_loss) / precio_actual
+
+    stop_recortado = pct_riesgo > config.STOP_LOSS_TOLERANCIA_PCT
+    if stop_recortado:
+        stop_loss = precio_actual * (1 - config.STOP_LOSS_MAX_PCT)
+        pct_riesgo = config.STOP_LOSS_MAX_PCT
+
+    return {
+        "stop_loss": stop_loss,
+        "take_profit": precio_actual + (precio_actual - stop_loss) * config.TAKE_PROFIT_RATIO,
+        "pct_riesgo": pct_riesgo,
+        "stop_recortado": stop_recortado,
+    }
+
+
 def calculate_ema(serie: pd.Series, span: int) -> pd.Series:
     """
     Media móvil exponencial de una serie de precios.
@@ -414,18 +455,14 @@ def evaluate_7_filters(ticker: str) -> Tuple[bool, dict]:
         }
     atr = float(atr)
 
-    stop_loss = precio_actual - (config.ATR_MULTIPLICADOR * atr)
-    pct_riesgo = (precio_actual - stop_loss) / precio_actual
-
-    # Si el ATR deja el stop más lejos que la tolerancia, se lo recorta al
-    # máximo estricto. Los dos números salen de config (3,5% y 3,0%).
-    stop_recortado = pct_riesgo > config.STOP_LOSS_TOLERANCIA_PCT
-    if stop_recortado:
-        stop_loss = precio_actual * (1 - config.STOP_LOSS_MAX_PCT)
-        pct_riesgo = config.STOP_LOSS_MAX_PCT
-
-    # --- Filtro 6: take-profit con el ratio R/B exigido ---
-    take_profit = precio_actual + (precio_actual - stop_loss) * config.TAKE_PROFIT_RATIO
+    # Filtros 5 y 6: stop por ATR (recortado al tope de config) y take-profit con
+    # el ratio R/B exigido. La fórmula vive en `calcular_stop_y_objetivo`, que
+    # comparten las tres fuentes de señal.
+    riesgo = calcular_stop_y_objetivo(precio_actual, atr)
+    stop_loss = riesgo["stop_loss"]
+    pct_riesgo = riesgo["pct_riesgo"]
+    stop_recortado = riesgo["stop_recortado"]
+    take_profit = riesgo["take_profit"]
 
     # Nivel de ruptura, para el filtro anti-chase del EntryValidator (Tarea 4.4).
     # Se congela acá, en el instante en que la señal técnica se valida, como pide

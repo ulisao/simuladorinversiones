@@ -12,7 +12,7 @@ Con entrada en 100,00 y los parámetros de `config`, los umbrales quedan redondo
     piso        103,50   (+3,5%)
     TP2         108,00   (+8,0%)
 """
-from datetime import datetime
+from datetime import date, datetime
 
 import pytest
 import pytz
@@ -413,6 +413,8 @@ def test_a_dict_incluye_todo_lo_necesario_para_reconstruir():
         "trailing_pullback",
         "min_guaranteed_pct",
         "tp2_pct",
+        "entry_date",
+        "max_dias",
     }
 
     assert set(manager().a_dict()) == esperadas
@@ -428,3 +430,95 @@ def test_el_estado_guardado_conserva_los_parametros_de_la_posicion():
     assert restaurado.tp2_pct == pytest.approx(0.12)
     assert restaurado.on_tick(104.5, HORA_RUEDA) is None  # con 6% todavía no hay TP1
     assert restaurado.on_tick(106.0, HORA_RUEDA)["reason"] == pm.MOTIVO_TP1_PARCIAL
+
+
+# ---------- Vencimiento por tiempo (Tarea 3.5) ----------
+#
+# La posición se compró el 2026-09-01. Con `SALIDA_SWING_MAX_DIAS = 10`, el
+# día 11 ya está vencida.
+
+COMPRA = date(2026, 9, 1)
+DIA_9 = datetime(2026, 9, 10, 11, 30)   # 9 días corridos: todavía viva
+DIA_10 = datetime(2026, 9, 11, 11, 30)  # 10 días corridos: vencida
+
+
+def manager_con_fecha(**kwargs) -> PositionManager:
+    return PositionManager("AAPL", ENTRADA, CANTIDAD, entry_date=COMPRA, **kwargs)
+
+
+def test_sin_entry_date_la_posicion_nunca_vence():
+    """Una posición sin fecha de compra no puede vencer: no inventamos la fecha."""
+    gestor = manager()  # sin entry_date
+
+    assert gestor.on_tick(101.0, datetime(2027, 1, 1, 11, 30)) is None
+    assert gestor.is_closed is False
+
+
+def test_antes_del_plazo_no_pasa_nada():
+    gestor = manager_con_fecha()
+
+    assert gestor.on_tick(101.0, DIA_9) is None
+    assert gestor.is_closed is False
+
+
+def test_cumplido_el_plazo_se_liquida_a_mercado():
+    gestor = manager_con_fecha()
+
+    orden = gestor.on_tick(101.0, DIA_10)
+
+    assert orden["reason"] == pm.MOTIVO_VENCIMIENTO
+    assert orden["action"] == pm.ACCION_VENTA
+    assert orden["qty"] == CANTIDAD, "vence la posición entera, no la mitad"
+    assert orden["note"] == pm.NOTA_VENCIMIENTO
+    assert gestor.is_closed is True
+
+
+def test_el_stop_loss_le_gana_al_vencimiento_en_el_mismo_tick():
+    """Si el precio ya está en el SL, manda el SL: es la estrategia real."""
+    gestor = manager_con_fecha()
+
+    orden = gestor.on_tick(96.0, DIA_10)  # -4%, por debajo del SL de -3%
+
+    assert orden["reason"] == pm.MOTIVO_STOP_INICIAL
+
+
+def test_el_tp1_le_gana_al_vencimiento_en_el_mismo_tick():
+    gestor = manager_con_fecha()
+
+    orden = gestor.on_tick(104.5, DIA_10)  # +4,5%, dispara TP1
+
+    assert orden["reason"] == pm.MOTIVO_TP1_PARCIAL
+
+
+def test_una_posicion_que_ya_cobro_tp1_no_vence_por_tiempo():
+    """Post-TP1 la gestiona el trailing: el vencimiento solo barre lo dormido."""
+    gestor = manager_con_fecha()
+    llevar_a_post_tp1(gestor)
+
+    # Precio quieto justo arriba del stop, mucho después del plazo.
+    assert gestor.on_tick(104.0, DIA_10) is None
+    assert gestor.is_closed is False
+
+
+def test_max_dias_en_cero_desactiva_la_regla():
+    gestor = manager_con_fecha(max_dias=0)
+
+    assert gestor.on_tick(101.0, datetime(2027, 1, 1, 11, 30)) is None
+
+
+def test_el_plazo_se_puede_configurar_por_posicion():
+    gestor = manager_con_fecha(max_dias=3)
+
+    assert gestor.on_tick(101.0, datetime(2026, 9, 3, 11, 30)) is None   # 2 días
+    assert gestor.on_tick(101.0, datetime(2026, 9, 4, 11, 30))["reason"] == pm.MOTIVO_VENCIMIENTO
+
+
+def test_el_vencimiento_sobrevive_a_un_reinicio():
+    """`entry_date` y `max_dias` viajan en el estado serializado."""
+    gestor = manager_con_fecha(max_dias=5)
+
+    restaurado = PositionManager.desde_dict(gestor.a_dict())
+
+    assert restaurado.entry_date == COMPRA
+    assert restaurado.max_dias == 5
+    assert restaurado.on_tick(101.0, datetime(2026, 9, 6, 11, 30))["reason"] == pm.MOTIVO_VENCIMIENTO

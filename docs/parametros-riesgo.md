@@ -1,14 +1,14 @@
 # Parámetros de riesgo del sistema
 
-> [!warning] ESTADO: PROVISORIO — FALTA CONFIRMACIÓN HUMANA (Tarea 0.1)
-> Estos valores son los que traen por defecto los manuales originales
+> [!done] ESTADO: Tarea 0.1 resuelta — 2026-09-06
+> El capital, los cupos por estrategia y el límite por operación están decididos
+> (ver "Capital y tamaño de posición"). El resto de los valores sigue siendo el
+> que traen los manuales originales
 > (`Manual_Maestro_Bot_Inversion_IA_Completo.docx`, sección 3, y
 > `Manual_Maestro_Bot_Bonos_Soberanos_Provinciales.docx`, sección 3).
-> Se cargaron acá para desbloquear las tareas de código que los necesitan
-> (3.2, 9.2 y 11.2), **no porque estén acordados**.
 >
-> Antes de operar con dinero real hay que revisarlos y firmarlos con el dueño del
-> capital, y actualizar `backend/app/config.py` si cambian.
+> Este archivo es la fuente de verdad: si cambia un número acá, tiene que cambiar
+> en `backend/app/config.py`, y al revés.
 
 ## Cómo se aplican al evaluar una señal
 
@@ -35,7 +35,36 @@ flowchart TD
 |---|---|---|
 | `CAPITAL_TOTAL` | `100_000.0` ARS | Capital total asignado al sistema. |
 | `MAX_POSICIONES` | `2` | Posiciones abiertas simultáneas como máximo. |
-| `MONTO_POR_POSICION` | `50_000.0` ARS | Monto máximo por posición (50% del capital). |
+| `CUPO_SWING` | `0.40` (40%) | Porción del capital para la estrategia de swing técnico (Fases 3-4). |
+| `CUPO_SMART_MONEY` | `0.60` (60%) | Porción para la estrategia de consenso institucional 13F (Tarea 5.5). |
+| `LIMITE_POR_OPERACION` | `0.50` (50%) | Máximo de **el cupo de su estrategia** que puede ir a un solo activo. |
+| `SALDO_MINIMO_OPERAR` | `10_000.0` ARS | Piso de saldo disponible por debajo del cual no se abren posiciones nuevas (lo usa la Tarea 11.2). |
+
+### Cómo se reparte el capital
+
+```mermaid
+flowchart TD
+    C["CAPITAL_TOTAL<br/>$100.000"] --> S["Swing técnico · 40%<br/>$40.000"]
+    C --> M["Smart Money 13F · 60%<br/>$60.000"]
+    S -->|"LIMITE_POR_OPERACION 50%"| S1["$20.000 por posición<br/>× 2 = $40.000"]
+    M -->|"LIMITE_POR_OPERACION 50%"| M1["$30.000 por posición"]
+```
+
+> [!warning] El límite se aplica sobre el cupo, no sobre el capital total
+> La Tarea 0.1 del plan sugiere un máximo de 15-20% (manuales) o 10% (Gemini) del
+> capital **total** en un solo activo. Acá se decidió mantener el 50% que ya
+> estaba, que queda por encima de ese rango: **es una excepción consciente**.
+>
+> Para que ese 50% conviva con los cupos hay que aplicarlo sobre el cupo de cada
+> estrategia. Si se aplicara sobre el capital total, una sola posición de swing
+> serían $50.000 contra un cupo de $40.000 — aritméticamente imposible.
+>
+> Consecuencia práctica: la exposición máxima real por posición es 20% del
+> capital total en swing y 30% en smart money, no 50%.
+
+> [!note] `MONTO_POR_POSICION` quedó como alias
+> Sigue existiendo por compatibilidad y hoy vale `monto_por_posicion("SWING")`.
+> Para cualquier cálculo nuevo usar `config.monto_por_posicion(estrategia)`.
 
 ## Gestión de riesgo por operación
 
@@ -94,6 +123,7 @@ Reemplaza al take-profit fijo R/B 1:2 una vez que la posición ya está abierta.
 | `SALIDA_TRAILING_PULLBACK` | `0.012` (1,2%) | Retroceso máximo tolerado desde el pico. El stop solo sube. |
 | `SALIDA_TP2_PCT` | `0.080` (+8,0%) | Techo: cierra el remanente. |
 | `SALIDA_HORA_CIERRE_PREVENTIVO` | `16:50` ART | Si queda posición con TP1 cobrado, se liquida a mercado. Cero riesgo overnight. |
+| `SALIDA_SWING_MAX_DIAS` | `10` días corridos | Vencimiento por tiempo (el `SWING_MAX_DIAS` del plan). Si a los 10 días no tocó ni el SL inicial ni el TP1, se cierra igual: no gana ni pierde, pero inmoviliza capital y ocupa un cupo de `MAX_POSICIONES`. Una posición que ya cobró TP1 no vence: la gestiona el trailing. |
 | `TZ_BYMA` | `America/Argentina/Buenos_Aires` | Zona horaria de la rueda local. |
 
 > [!note] Por qué el cierre de las 16:50
@@ -115,11 +145,64 @@ Reemplaza al take-profit fijo R/B 1:2 una vez que la posición ya está abierta.
 > (fail-safe), igual que el circuit breaker de VIX: dejar pasar habilitaría el
 > universo entero justo el día que Yahoo no responde.
 
+## Señal alternativa por RSI (Tarea 3.7)
+
+Fuente de señal paralela a los 7 filtros, deliberadamente más simple. **Conviven**:
+ninguna reemplaza a la otra, y cada candidato de `/senales` sale marcado con su
+`origen` (`7_FILTROS`, `RSI` o `AMBOS`) para poder comparar cuál rinde mejor.
+
+| Parámetro | Valor | Significado |
+|---|---|---|
+| `RSI_PERIODO` | `14` | Períodos del RSI, con suavizado de Wilder. |
+| `RSI_SOBREVENTA` | `30.0` | Por debajo de este RSI se considera sobreventa y se dispara la señal. |
+| `LIQUIDEZ_SPREAD_MAX` | `0.010` (1,0%) | Spread bid/ask máximo para considerar líquido un CEDEAR. Más amplio que el de bonos porque el mercado es menos profundo. |
+
+> [!warning] El filtro de liquidez todavía no bloquea
+> No hay de dónde sacar el libro de órdenes del CEDEAR en BYMA: `yfinance` da la
+> acción del subyacente en EE.UU. Sin bid/ask reales, `rsi_signal.chequear_liquidez`
+> devuelve "pasa" con `disponible=False`. La lógica está escrita y probada; se
+> vuelve bloqueante sola en cuanto `IOLClient` (Fase 8) traiga las puntas.
+
+El stop-loss y el take-profit de una señal de RSI se calculan con **el mismo
+criterio que los 7 filtros** (ATR × `ATR_MULTIPLICADOR`, recortado a
+`STOP_LOSS_MAX_PCT`, R/B `TAKE_PROFIT_RATIO`): cambia el disparador de la señal,
+no la gestión del riesgo.
+
+## Consenso institucional 13F (Tareas 5.3, 5.4 y 5.5)
+
+Estrategia independiente del swing técnico, con su propio cupo de capital. A
+diferencia del RVOL y los Form 4 (que son solo contexto), **esta genera y cierra
+operaciones por sí sola**.
+
+| Parámetro | Valor | Significado |
+|---|---|---|
+| `FONDOS_13F` | 5 fondos | CIKs de SEC EDGAR que se siguen: Berkshire, Bridgewater, Renaissance, Tiger Global y Baupost. |
+| `SMART_MIN_CONSENSO` | `2` | Fondos distintos que tienen que coincidir para generar una señal de compra. |
+| `SMART_MIN_PESO_CARTERA` | `0.01` (1,0%) | Peso mínimo de la posición en la cartera del fondo. Por debajo, es ruido para el fondo. |
+| `SMART_MAX_DELAY_SUBA` | `0.10` (+10%) | Si el precio actual ya se despegó más que esto del precio promedio del fondo, la señal llegó tarde. |
+
+> [!warning] Los 13F llegan con hasta 45 días de rezago legal
+> Son trimestrales y se presentan tarde por ley. Para cuando el dato es público,
+> el papel ya se movió: sin `SMART_MAX_DELAY_SUBA` se compraría sistemáticamente
+> arriba del precio al que entró el fondo. Esta fuente da pocas señales al año,
+> por diseño.
+
+> [!note] Asimetría entre entrar y salir
+> Para **comprar** hacen falta `SMART_MIN_CONSENSO` fondos. Para **vender**
+> alcanza con uno que reduzca o cierre. Es deliberado: el costo de salir antes de
+> tiempo es perderse una suba; el de quedarse, una caída con la tesis ya rota.
+
 ## Ejecución real
 
 | Parámetro | Valor | Significado |
 |---|---|---|
-| `EJECUCION_REAL_HABILITADA` | `false` | Kill switch. Mientras esté en `false`, el sistema genera y notifica señales pero nunca envía una orden a IOL. |
+| `MODO_FANTASMA` | `true` | Kill switch. Mientras esté en `true`, el sistema genera, notifica y registra igual que si operara, pero **nunca** llama a la API de IOL. Recién con `false` sale una orden real. |
+
+> [!warning] `EJECUCION_REAL_HABILITADA` quedó obsoleta
+> Era la misma idea con la lógica invertida. La Tarea 11.2 del plan pide unificar
+> en un solo nombre para no terminar con dos variables haciendo lo mismo. La
+> variable vieja **ya no se lee**: si quedó en algún `.env`, `config.py` avisa por
+> consola en vez de ignorarla en silencio.
 
 ## Cómo cambiar estos valores
 

@@ -11,6 +11,24 @@ Referencia de spec: Manual_Maestro_Bot_Inversion_IA_Completo, sección 6
 (`yf.Ticker(ticker).history(period="60d")` es la base del cálculo de ATR y de
 los 7 filtros técnicos).
 
+⚠ ESTE PRECIO NO ES EL DEL CEDEAR (Tarea 2.1 del plan)
+-------------------------------------------------------
+`yf.Ticker("AAPL")` devuelve el precio de la **acción en EE.UU., en dólares**.
+El CEDEAR de AAPL en BYMA cotiza **en pesos**, con un ratio de conversión y el
+dólar CCL de por medio: son números completamente distintos.
+
+Sirve para lo que este módulo existe —el **patrón técnico** (RSI, EMAs, ATR,
+fuerza relativa, forma del gráfico)— porque el CEDEAR sigue de cerca el
+movimiento porcentual del subyacente. **No sirve** para:
+
+* calcular cuántos papeles comprar,
+* mostrar un precio de entrada como si fuera operable,
+* validar un spread bid/ask.
+
+El precio real en pesos tiene que salir de la cotización de IOL (`IOLClient`,
+Fase 8). Hasta entonces, todo lo que muestre este precio va marcado con
+`ADVERTENCIA_PRECIO_REFERENCIA`.
+
 Cache: `get_history` cachea en memoria por (ticker, period) durante
 `TTL_CACHE_SEGUNDOS`. El escaneo de señales pide el mismo histórico muchas
 veces seguidas —sobre todo el del benchmark SPY, una vez por cada ticker del
@@ -37,6 +55,17 @@ logging.getLogger("yfinance").setLevel(logging.CRITICAL)
 
 class MarketDataError(Exception):
     """Error controlado al pedir datos de mercado (ticker inválido, sin datos o red caída)."""
+
+
+# ---------- Advertencia de precio (Tarea 2.1) ----------
+
+# Texto único: lo usan `/market/precio/{ticker}`, `/senales` y el frontend. Si
+# cambia la redacción, cambia en un solo lugar.
+ADVERTENCIA_PRECIO_REFERENCIA = (
+    "Referencia técnica, no operable: es el precio de la acción subyacente en "
+    "EE.UU. (USD), no el del CEDEAR en BYMA (ARS). Sirve para el patrón técnico, "
+    "no para calcular cantidades ni el precio de entrada real."
+)
 
 
 # ---------- Cache en memoria con TTL ----------
@@ -125,6 +154,9 @@ def get_last_price(ticker: str) -> float:
 
     Usa una ventana corta ("5d") para cubrir fines de semana y feriados, y pasa
     por la misma cache que `get_history`.
+
+    OJO: es el precio del subyacente en USD, no el del CEDEAR en ARS. Ver
+    `ADVERTENCIA_PRECIO_REFERENCIA` y el encabezado del módulo.
 
     Raises:
         MarketDataError: ticker inexistente, sin datos o fallo de red.

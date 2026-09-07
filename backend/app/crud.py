@@ -2,7 +2,7 @@ from datetime import date
 from typing import Optional
 from sqlalchemy.orm import Session
 
-from . import models, schemas
+from . import config, models, schemas
 from .calculations import BrokerRates, compute_trade
 
 
@@ -70,6 +70,7 @@ def create_trade(db: Session, data: schemas.TradeCreate) -> models.Trade:
     trade = models.Trade(
         ticker=data.ticker.upper().strip(),
         tipo=data.tipo,
+        estrategia=(data.estrategia or config.ESTRATEGIA_SWING).upper().strip(),
         fecha_compra=data.fecha_compra,
         cantidad=data.cantidad,
         precio_entrada=data.precio_entrada,
@@ -104,51 +105,89 @@ def delete_trade(db: Session, trade: models.Trade) -> None:
     db.commit()
 
 
-def build_dashboard(db: Session) -> schemas.DashboardOut:
-    cfg = get_or_create_broker_config(db)
-    rates = _rates_from_config(cfg)
-    trades = list_trades(db)
+def _metricas(trades, rates) -> dict:
+    """Métricas del dashboard sobre un conjunto de operaciones.
 
-    capital_total_invertido = 0.0
-    total_comisiones = 0.0
-    ganancia_neta_total = 0.0
+    Se calcula todo con `compute_trade`, que es la única fuente de verdad de las
+    comisiones. Acá solo se agrupa.
+    """
+    capital = 0.0
+    comisiones = 0.0
+    resultado = 0.0
     cerradas = 0
     ganadoras = 0
     perdedoras = 0
+    abiertas = 0
 
     for t in trades:
         c = compute_trade(t.cantidad, t.precio_entrada, t.precio_salida, rates)
-        capital_total_invertido += c.capital_bruto_invertido
-        total_comisiones += c.comision_compra
+        capital += c.capital_bruto_invertido
+        comisiones += c.comision_compra
         if c.estado_posicion == "CERRADA":
-            total_comisiones += c.comision_venta or 0.0
-            ganancia_neta_total += c.resultado_neto or 0.0
+            comisiones += c.comision_venta or 0.0
+            resultado += c.resultado_neto or 0.0
             cerradas += 1
             if (c.resultado_neto or 0) > 0:
                 ganadoras += 1
             elif (c.resultado_neto or 0) < 0:
                 perdedoras += 1
+        else:
+            abiertas += 1
 
-    rentabilidad_pct = (
-        ganancia_neta_total / capital_total_invertido if capital_total_invertido else 0.0
-    )
-    tasa_acierto = (ganadoras / cerradas) if cerradas else 0.0
+    return {
+        "capital_total_invertido": round(capital, 2),
+        "total_comisiones_pagadas": round(comisiones, 2),
+        "ganancia_perdida_neta_total": round(resultado, 2),
+        "rentabilidad_neta_ponderada_pct": round(resultado / capital, 4) if capital else 0.0,
+        "total_operaciones_ejecutadas": cerradas,
+        "operaciones_ganadoras": ganadoras,
+        "operaciones_perdedoras": perdedoras,
+        "tasa_acierto_pct": round(ganadoras / cerradas, 4) if cerradas else 0.0,
+        "posiciones_abiertas": abiertas,
+    }
+
+
+def build_dashboard(db: Session) -> schemas.DashboardOut:
+    cfg = get_or_create_broker_config(db)
+    rates = _rates_from_config(cfg)
+    trades = list_trades(db)
+
+    total = _metricas(trades, rates)
+
     veredicto = (
         "SISTEMA RENTABLE - LISTO PARA REAL"
-        if ganancia_neta_total > 0
+        if total["ganancia_perdida_neta_total"] > 0
         else "SISTEMA A REVISAR - NO INVERTIR DINERO REAL"
     )
 
+    # Desglose por estrategia (Tarea 5.5). Se listan todas las estrategias
+    # configuradas aunque no tengan operaciones todavía: ver un cupo asignado con
+    # cero operaciones es información, no un hueco.
+    estrategias = list(config.CUPOS_POR_ESTRATEGIA)
+    for t in trades:
+        if t.estrategia and t.estrategia not in estrategias:
+            estrategias.append(t.estrategia)
+
+    por_estrategia = [
+        schemas.MetricasEstrategia(
+            estrategia=nombre,
+            cupo_asignado=round(config.cupo_de(nombre), 2),
+            **_metricas([t for t in trades if (t.estrategia or config.ESTRATEGIA_SWING) == nombre], rates),
+        )
+        for nombre in estrategias
+    ]
+
     return schemas.DashboardOut(
-        capital_total_invertido=round(capital_total_invertido, 2),
-        total_comisiones_pagadas=round(total_comisiones, 2),
-        ganancia_perdida_neta_total=round(ganancia_neta_total, 2),
-        rentabilidad_neta_ponderada_pct=round(rentabilidad_pct, 4),
-        total_operaciones_ejecutadas=cerradas,
-        operaciones_ganadoras=ganadoras,
-        operaciones_perdedoras=perdedoras,
-        tasa_acierto_pct=round(tasa_acierto, 4),
+        capital_total_invertido=total["capital_total_invertido"],
+        total_comisiones_pagadas=total["total_comisiones_pagadas"],
+        ganancia_perdida_neta_total=total["ganancia_perdida_neta_total"],
+        rentabilidad_neta_ponderada_pct=total["rentabilidad_neta_ponderada_pct"],
+        total_operaciones_ejecutadas=total["total_operaciones_ejecutadas"],
+        operaciones_ganadoras=total["operaciones_ganadoras"],
+        operaciones_perdedoras=total["operaciones_perdedoras"],
+        tasa_acierto_pct=total["tasa_acierto_pct"],
         veredicto=veredicto,
+        por_estrategia=por_estrategia,
     )
 
 

@@ -97,9 +97,20 @@ def _sin_red(monkeypatch, vix_estado, vix_check, *, espia=None, regimen=None):
             "pct_riesgo": 3.0,
         }
 
+    def rsi(ticker, bid=None, ask=None):
+        """Por defecto la fuente RSI no dispara: los tests viejos miden los 7 filtros."""
+        if espia is not None:
+            espia.append(("rsi", ticker))
+        return False, {
+            "ticker": ticker,
+            "rsi": 50.15,
+            "motivo": f"SIN SEÑAL RSI: {ticker} en 50.15, no está sobrevendido (umbral 30).",
+        }
+
     monkeypatch.setattr(signals.risk_filters, "get_finbert_sentiment", sentimiento)
     monkeypatch.setattr(signals.smart_money, "contexto_smart_money", contexto)
     monkeypatch.setattr(signals.technical_filters, "evaluate_7_filters", filtros)
+    monkeypatch.setattr(signals.rsi_signal, "evaluar_rsi", rsi)
 
 
 # ---------- Tarea 4.3: el veto de VIX corta el escaneo ----------
@@ -157,7 +168,11 @@ def test_los_descartados_conservan_su_motivo(monkeypatch):
 
     resultado = signals.escanear_senales(["KO"])
 
-    assert resultado["descartados"][0]["motivo"] == "VETO TÉCNICO: estructura no alcista"
+    # Con dos fuentes de señal (Tarea 3.7) el descarte trae las dos razones: la
+    # regla del repo es que ningún motivo de veto se pierda.
+    motivo = resultado["descartados"][0]["motivo"]
+    assert "VETO TÉCNICO: estructura no alcista" in motivo
+    assert "SIN SEÑAL RSI" in motivo
 
 
 def test_el_veto_por_noticias_descarta_sin_evaluar_los_7_filtros(monkeypatch):
@@ -175,6 +190,7 @@ def test_el_veto_por_noticias_descarta_sin_evaluar_los_7_filtros(monkeypatch):
     assert resultado["candidatos"] == []
     assert resultado["descartados"][0]["motivo"].startswith("VETO CISNE NEGRO")
     assert ("filtros", "NVDA") not in espia
+    assert ("rsi", "NVDA") not in espia, "el veto de noticias corta las DOS fuentes"
 
 
 def test_smart_money_no_vetea_nunca(monkeypatch):

@@ -21,7 +21,12 @@ simulador-inversiones/
 │                      app/calculations.py (fórmulas idénticas al Excel).
 │                      Encima se apoya el motor de señales: config.py,
 │                      market_data.py, technical_filters.py, risk_filters.py,
-│                      smart_money.py, fixed_income_filters.py, signals.py.
+│                      smart_money.py, fixed_income_filters.py, signals.py,
+│                      rsi_signal.py (fuente de señal alternativa),
+│                      edgar_13f.py + wallstreet_tracker.py (consenso 13F).
+│                      Alertas y automatización: app/notifications.py,
+│                      app/weekly_report.py, scanner_job.py,
+│                      position_monitor_job.py.
 ├── frontend/          Next.js + Tailwind. Dashboard, Simulador, Señales,
 │                      Configuración.
 └── docs/              Manuales originales (.docx), su texto plano en
@@ -79,7 +84,42 @@ La API queda en `http://localhost:8123` (documentación interactiva en
 > esas dos líneas — `app/risk_filters.py` está escrito para funcionar sin ellas,
 > salteando el filtro de sentimiento.
 
-### 2. Frontend
+### 2. Alertas y escaneo automático (opcional)
+
+Con `TELEGRAM_BOT_TOKEN` y `TELEGRAM_CHAT_ID` cargados en `backend/.env`, el
+sistema puede avisarte solo. Nada de esto ejecuta órdenes: solo notifica.
+
+```bash
+cd backend
+
+# Probar que el bot llega a tu chat
+curl -X POST http://localhost:8123/notificaciones/test
+
+# Escaneo periódico + monitor de posiciones (Fase 10). Corre en primer plano.
+./venv/Scripts/python.exe scanner_job.py
+
+# Un solo ciclo, forzando el chequeo de horario a "siempre activo"
+./venv/Scripts/python.exe scanner_job.py --una-vez --ignorar-horario
+
+# Mandar el reporte semanal ahora mismo, sin esperar al viernes
+./venv/Scripts/python.exe scanner_job.py --reporte-semanal
+```
+
+| Qué avisa | Cuándo | Tarea |
+|---|---|---|
+| Cierre de una operación | Al hacer `POST /trades/{id}/cerrar` desde la app | 7.2 |
+| Venta del gestor de salidas (TP1, trailing, cierre 16:50) | En cada barrido del monitor de posiciones | 7.2 |
+| Señal nueva | Cada 10 min en rueda BYMA, una vez por ticker y por día | 10.1 |
+| Escaneo bloqueado (VIX en pánico o mercado bajista) | Una vez por día | 10.1 |
+| Resumen de la semana | Viernes 17:30, hora del servidor | 12.2 |
+
+> [!warning] El planificador usa el reloj del sistema
+> El horario de rueda se chequea en ART, pero el `viernes 17:30` del reporte
+> semanal es hora local del servidor. Dejá el servidor en
+> `America/Argentina/Buenos_Aires` (es lo que pide la Tarea 10.2) para que las
+> dos cosas coincidan.
+
+### 3. Frontend
 
 En otra terminal:
 
@@ -98,17 +138,78 @@ Copiá `backend/.env.example` a `backend/.env` y completá lo que necesites.
 Ninguna credencial va hardcodeada ni versionada: `.env` está en `.gitignore`,
 y `app/config.py` es el único módulo que las lee.
 
-| Variable | Para qué | Obligatoria |
-|---|---|---|
-| `IOL_USERNAME` / `IOL_PASSWORD` | API de InvertirOnline | Solo desde la Fase 8 |
-| `TELEGRAM_BOT_TOKEN` / `TELEGRAM_CHAT_ID` | Alertas | Solo desde la Fase 7 |
-| `GOOGLE_CREDENTIALS_PATH` | Ruta a `credenciales_google.json` | Solo con Sheets (Fase 6) |
-| `CAPITAL_TOTAL`, `MAX_POSICIONES`, `MONTO_POR_POSICION` | Pisan los defaults de `config.py` | No |
-| `EJECUCION_REAL_HABILITADA` | Kill switch. En `false` (default) nunca sale una orden real | No |
+| Variable | Para qué | Obligatoria | Es secreto |
+|---|---|---|---|
+| `IOL_USERNAME` | Usuario de InvertirOnline. Lo usa `app/broker_iol.py` para el OAuth2 contra `/token` | Para todo `/iol/*` y `/mercado/ccl` (Fase 8) | Sí |
+| `IOL_PASSWORD` | Contraseña de InvertirOnline | Para todo `/iol/*` y `/mercado/ccl` (Fase 8) | **Sí — es la contraseña de la cuenta real** |
+| `IOL_API_URL` | Base de la API de IOL. Default `https://api.invertironline.com` | No | No |
+| `TELEGRAM_BOT_TOKEN` | Token del bot. **Viaja dentro de la URL** que se le pega a Telegram | Solo para las alertas (Fases 7, 10 y 12) | Sí |
+| `TELEGRAM_CHAT_ID` | Chat de destino de las alertas | Solo para las alertas | Identifica el destino |
+| `CAPITAL_TOTAL`, `MAX_POSICIONES`, `CUPO_SWING`, `CUPO_SMART_MONEY`, `LIMITE_POR_OPERACION` | Pisan los defaults de `config.py` | No | No |
+| `SEC_USER_AGENT` | Dato de contacto que exige la API de SEC EDGAR (consenso 13F). No es una credencial | No | No |
+| `MODO_FANTASMA` | Kill switch. En `true` (default) nunca sale una orden real | No | No |
 
 > [!note] Arranca sin credenciales
 > Sin ninguna de estas variables el proyecto funciona igual: el simulador y el
-> motor de señales no necesitan credenciales.
+> motor de señales no necesitan credenciales. Lo único que se cae sin
+> `IOL_USERNAME`/`IOL_PASSWORD` son los endpoints `/iol/saldo` y `/mercado/ccl`,
+> que devuelven un `503` con el motivo en castellano.
+
+### Cargar las credenciales al desplegar (VPS)
+
+El `.env` **no se commitea nunca** — está en `.gitignore` y `git ls-files
+backend/.env` tiene que salir vacío. Al desplegar se crea a mano en el servidor:
+no se copia desde la máquina de desarrollo por un canal que quede registrado
+(nada de pegarlo en un chat, en un issue o en el historial de un shell
+compartido).
+
+```mermaid
+flowchart TD
+    CLONE[git clone del repo<br/>llega SIN .env] --> CREATE[Crear backend/.env<br/>en el servidor, a mano]
+    EXAMPLE[backend/.env.example<br/>versionado, sin valores] -.plantilla.-> CREATE
+    CREATE --> PERMS["chmod 600 backend/.env<br/>chown al usuario del servicio"]
+    PERMS --> LOAD[python-dotenv lo lee<br/>solo desde app/config.py]
+    LOAD --> APP[uvicorn / scanner_job]
+```
+
+Paso a paso en el VPS:
+
+```bash
+# 1. Clonar. El repo NO trae el .env: no existe del lado del servidor todavía.
+git clone <repo> simuladorinversiones && cd simuladorinversiones/backend
+
+# 2. Partir de la plantilla versionada, que viene con las claves vacías.
+cp .env.example .env
+
+# 3. Completar los valores con un editor local al servidor (nunca por copiar y
+#    pegar en un canal que quede grabado).
+nano .env      # IOL_USERNAME, IOL_PASSWORD, TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+
+# 4. Dejarlo legible SOLO por el usuario que corre el bot.
+chmod 600 .env
+chown "$USER":"$USER" .env
+
+# 5. Verificar que git no lo ve. Las dos salidas tienen que estar vacías.
+git ls-files .env
+git status --porcelain | grep '\.env$'
+
+# 6. Comprobar que las credenciales entraron bien, sin imprimirlas.
+./venv/bin/python -c "from app import config; print('IOL:', bool(config.IOL_USERNAME and config.IOL_PASSWORD)); print('Telegram:', bool(config.TELEGRAM_BOT_TOKEN and config.TELEGRAM_CHAT_ID))"
+```
+
+> [!warning] Qué NO hacer en el servidor
+> - No pasar las credenciales por línea de comandos (`IOL_PASSWORD=... uvicorn ...`):
+>   quedan en `~/.bash_history` y las ve cualquiera con `ps aux`.
+> - No pegarlas en un `docker run -e`, un `systemd` `Environment=` ni un
+>   `ExecStart` — usar `EnvironmentFile=/ruta/backend/.env` con permisos `600`.
+> - No dejar la clave SSH del VPS dentro del repo. `.gitignore` ya bloquea
+>   `*.key`, `*.pem`, `id_rsa*` y `ssh-key-*`, pero el lugar correcto es
+>   `~/.ssh/` con `chmod 600`.
+
+> [!note] Si una credencial se filtró
+> Rotar primero, limpiar después. Cambiar la contraseña en IOL y regenerar el
+> token con `@BotFather` es inmediato; reescribir el historial de git no
+> "desfiltra" nada que ya se haya publicado.
 
 ### Tests
 
@@ -119,6 +220,25 @@ cd backend
 
 pytest -m "not network"    # sin pegarle a Yahoo Finance / SEC / Google News
 ```
+
+## Endpoints de la API
+
+| Método | Ruta | Qué devuelve |
+|---|---|---|
+| `GET` | `/senales` | CEDEARs: 7 filtros técnicos + RSI de sobreventa, cada candidato con su `origen` |
+| `GET` | `/senales/bonos` | Renta fija: precio **real en pesos** de BYMA, vía IOL |
+| `GET` | `/senales/smart-money` | Consenso institucional 13F de 5 fondos grandes |
+| `GET` | `/iol/saldo` | Saldo y tenencia **real** de la cuenta comitente (solo lectura) |
+| `GET` | `/mercado/ccl` | Dólar Contado con Liquidación implícito (AL30 / AL30D) |
+| `GET` | `/dashboard` | Métricas de paper trading, con desglose por estrategia |
+| `GET` | `/riesgo/vix` | Estado del circuit breaker de VIX |
+| `POST` | `/notificaciones/test` | Manda un mensaje de prueba a Telegram |
+
+> [!warning] Dos fuentes de precio, y no son intercambiables
+> `/senales` (CEDEARs) usa **yfinance**, que devuelve la acción subyacente en
+> **USD** — sirve para el patrón técnico, no para calcular cantidades. `/senales/bonos`
+> y `/iol/saldo` usan **IOL**, que da el precio **real en pesos**. Para la misma
+> fecha, AAPL vale US$ 319,97 en yfinance y $ 25.400 como CEDEAR en BYMA.
 
 ## Cómo se usa: el flujo de trabajo
 
@@ -214,11 +334,8 @@ calculados no se guardan en la base: se derivan al vuelo desde `calculations.py`
 
 | No hace | Por qué | Se desbloquea con |
 |---|---|---|
-| Ver tu saldo real de IOL | Faltan credenciales de API | Tarea 0.2 👤 |
 | Ejecutar órdenes | Fase 11, deliberadamente no construida | Validación previa (Tarea 10.4) |
-| Avisarte por Telegram | Falta el token del bot | Tarea 0.3 👤 |
-| Señales de bonos | El motor de filtros ya existe, falta de dónde sacar el precio | Tarea 0.2 👤 (IOL) |
-| Escanear solo, sin abrir la app | Fase 10 | Telegram + VPS |
+| Correr 24/7 en un servidor | El scanner ya existe y corre solo, pero todavía en tu máquina | VPS (Tarea 10.2 👤) |
 
 Hoy es **100% papel**: vos cargás, vos cerrás, el sistema calcula y opina.
 
@@ -248,20 +365,23 @@ con la evidencia de cómo se probó, en `PROGRESS.md`.
 | 1 | **Paper trading manual** | ✅ | Cargar señales a mano y auditar si conviene seguir. |
 | 2 | **Precios reales y señales técnicas** | ✅ | `yfinance` para autocompletar el precio, más los 7 filtros de los manuales (tendencia, ATR, fuerza relativa vs. SPY, earnings). Sin ejecutar nada. |
 | 3 | **Filtro de noticias y riesgo** | ✅ | Circuit breaker de VIX + FinBERT local, como capa de veto antes de sugerir una compra. |
-| 4 | **Conectar IOL en modo lectura** | ⏳ | Saldo y tenencia real de la cuenta comitente. **Bloqueado:** faltan las credenciales de API de IOL, que se piden desde la configuración de la cuenta. |
-| 5 | **Alertas y escaneo 24/7** | ⏳ | Telegram + un job que escanee solo, sin que nadie abra la app. **Bloqueado:** falta el token del bot de Telegram. Es la credencial más fácil de obtener y la que más desbloquea. |
+| 3b | **Consenso institucional (13F)** | ✅ | Segunda estrategia, independiente del swing técnico y con su propio cupo de capital: sigue qué compraron 5 fondos grandes en SEC EDGAR y exige que coincidan al menos dos. |
+| 4 | **Conectar IOL en modo lectura** | ✅ | Saldo y tenencia real de la cuenta comitente, dólar CCL y cotizaciones reales en pesos de BYMA. El login contra IOL está verificado. Habilitó además las señales de bonos (9.4), que necesitaban precio en Contado Inmediato. |
+| 5 | **Alertas y escaneo 24/7** | 🟡 | Telegram ya avisa cierres, señales nuevas y el reporte semanal, y `scanner_job.py` escanea solo sin que nadie abra la app. **Falta:** el VPS para que corra 24/7 (Tarea 10.2 👤). |
 | 6 | **Ejecución automática de órdenes** | ⛔ | Recién después de varias semanas de paper trading con esperanza matemática positiva. Implica manejar plata real: logs auditables y límites de riesgo estrictos (stop-loss, tamaño de posición) desde el día uno. |
 
 ```mermaid
 flowchart LR
     E1["1 · Paper trading"]:::hecho --> E2["2 · Precios y<br/>filtros técnicos"]:::hecho
     E2 --> E3["3 · Noticias y riesgo"]:::hecho
-    E3 --> E4["4 · IOL lectura"]:::bloq
-    E4 --> E5["5 · Alertas y 24/7"]:::bloq
+    E3 --> E4["4 · IOL lectura"]:::hecho
+    E4 --> E5["5 · Alertas y 24/7"]:::parcial
     E5 --> E6["6 · Ejecución real"]:::stop
 
     classDef hecho fill:#065f46,stroke:#10b981,color:#fff
     classDef bloq fill:#78350f,stroke:#f59e0b,color:#fff
+    classDef parcial fill:#1e3a5f,stroke:#60a5fa,color:#fff
+    classDef listo fill:#3f3f46,stroke:#a1a1aa,color:#fff
     classDef stop fill:#7f1d1d,stroke:#ef4444,color:#fff
 ```
 
@@ -279,9 +399,19 @@ Lo que ya está puesto para cuando eso cambie:
 
 | Salvaguarda | Cómo funciona |
 |---|---|
-| Credenciales fuera del repo | Van en variables de entorno (`backend/.env`), nunca hardcodeadas ni versionadas. `.env` está en `.gitignore` y `app/config.py` es el único módulo que las lee. |
-| Kill switch | `EJECUCION_REAL_HABILITADA` está en `false` por defecto. Mientras siga así, ningún código puede enviar una orden a IOL. |
+| Credenciales fuera del repo | Van en variables de entorno (`backend/.env`), nunca hardcodeadas ni versionadas. `.env` está en `.gitignore` y `app/config.py` es el único módulo que las lee. Cómo cargarlas en un servidor: ["Cargar las credenciales al desplegar (VPS)"](#cargar-las-credenciales-al-desplegar-vps). |
+| Claves privadas bloqueadas por patrón | `.gitignore` ignora `*.key`, `*.pem`, `*.p12`, `id_rsa*`, `id_ed25519*` y `ssh-key-*`. Una clave privada commiteada es prácticamente imposible de sacar del historial después, así que se bloquea por forma y no por nombre puntual (Tarea 8.3). |
+| Ningún secreto en logs ni en respuestas | `broker_iol.py` nunca loguea el token ni la contraseña — el usuario sale ofuscado (`ul***@...`) y su `__repr__` solo dice "autenticado / sin token". `notifications.py` redacta el `TELEGRAM_BOT_TOKEN` de todo texto derivado de una excepción o de un cuerpo de error, porque la API de Telegram lleva el token **dentro de la URL** y `requests` la incluye entera en sus errores de red (Tarea 8.3). |
+| Kill switch | `MODO_FANTASMA` está en `true` por defecto. Mientras siga así, ningún código puede enviar una orden a IOL. (Reemplaza a la vieja `EJECUCION_REAL_HABILITADA`, que ya no se lee: si quedó en un `.env`, `config.py` avisa por consola.) |
 | Parámetros centralizados | Los parámetros de riesgo viven en `app/config.py` y están documentados en `docs/parametros-riesgo.md`. Ningún módulo hardcodea capital, stop-loss ni tamaño de posición. |
+
+Chequeo rápido de que nada se filtró, corriendo desde la raíz del repo:
+
+```bash
+git ls-files backend/.env                      # tiene que salir vacío
+git log --all -p | grep -i "iol_password"      # solo placeholders de los manuales
+git check-ignore -v ssh-key-*.key              # tiene que decir IGNORADO
+```
 
 > [!warning] `docs/parametros-riesgo.md` está marcado como PROVISORIO
 > Tiene los valores por defecto de los manuales ($100.000 ARS, 2 posiciones,

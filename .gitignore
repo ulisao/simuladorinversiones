@@ -7,10 +7,43 @@ __pycache__/
 # Base de datos local
 backend/*.db
 
-# Credenciales
+# Credenciales — archivos .env (Tarea 8.3)
+# Se ignora cualquier .env en cualquier carpeta, salvo los .example que SÍ se
+# versionan (son la plantilla sin valores).
 .env
+.env.*
+**/.env
+**/.env.*
+!.env.example
+!**/.env.example
 backend/.env
 credenciales_google.json
+
+# Claves privadas y certificados (Tarea 8.3)
+# Una clave privada commiteada es prácticamente imposible de sacar del historial
+# después: se bloquea por patrón, no por nombre puntual.
+*.key
+*.pem
+*.p12
+*.pfx
+*.jks
+*.keystore
+*.ppk
+*.asc
+*.gpg
+id_rsa*
+id_dsa*
+id_ecdsa*
+id_ed25519*
+*.key.pub
+ssh-key-*
+.ssh/
+# Credenciales de nubes / servicios
+*service-account*.json
+*credentials*.json
+.aws/
+.netrc
+_netrc
 
 # Next.js
 frontend/node_modules/
@@ -20,3 +53,4 @@ frontend/out/
 # Sistema
 .DS_Store
 Thumbs.db
+backend/data/

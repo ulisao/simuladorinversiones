@@ -6,6 +6,10 @@ import type {
   BrokerConfig,
   PrecioMercado,
   Senales,
+  SenalesSmartMoney,
+  SenalesBonos,
+  SaldoIOL,
+  Ccl,
 } from "./types";
 
 const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8123";
@@ -70,4 +74,16 @@ export const api = {
   getPrecioMercado: (ticker: string) =>
     request<PrecioMercado>(`/market/precio/${encodeURIComponent(ticker)}`),
   getSenales: () => request<Senales>("/senales"),
+  /** Renta fija (Tarea 9.4). Precios REALES en pesos, vía IOL. */
+  getSenalesBonos: () => request<SenalesBonos>("/senales/bonos"),
+  /**
+   * Consenso institucional 13F (Tarea 5.5). Es lenta: los filings son
+   * trimestrales y la primera llamada de cada trimestre baja todo de SEC EDGAR.
+   */
+  getSenalesSmartMoney: () =>
+    request<SenalesSmartMoney>("/senales/smart-money"),
+  /** Saldo y tenencia REAL de IOL (Tarea 8.2). Solo lectura. */
+  getSaldoIOL: () => request<SaldoIOL>("/iol/saldo"),
+  /** Dólar CCL implícito (Tarea 8.4). Contexto macro, no veta nada. */
+  getCcl: () => request<Ccl>("/mercado/ccl"),
 };
