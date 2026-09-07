@@ -1,0 +1,21 @@
+# Copiar a /etc/cloudflared/config.yml en el VPS y completar los dos valores
+# que salen de `cloudflared tunnel create tradingbot`.
+#
+# El archivo NO lleva secretos: las credenciales están en el .json que apunta
+# credentials-file. Aun así va con chmod 600 y dueño tradingbot.
+
+tunnel: PONER-EL-UUID-DEL-TUNEL
+credentials-file: /etc/cloudflared/PONER-EL-UUID-DEL-TUNEL.json
+
+# El único servicio publicado es la API, y solo por el hostname exacto.
+# La regla final (404) es obligatoria: sin ella cloudflared no arranca.
+ingress:
+  - hostname: api.PONER-TU-DOMINIO.com
+    service: http://127.0.0.1:8123
+  - service: http_status:404
+
+# Sin esto, una consulta lenta (/senales baja datos de yfinance, SEC y corre
+# FinBERT) se corta a los 30 segundos por default.
+originRequest:
+  connectTimeout: 30s
+  noTLSVerify: false

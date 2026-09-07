@@ -3076,3 +3076,142 @@ CAPITAL_TOTAL $2,000,000 -> monto x posicion swing $400,000
 > [!todo] Próximo paso
 > Sigue siendo la Tarea 10.4 👤. Con esto, el circuito ya no depende de que haya
 > alguien cargando operaciones a mano: alcanza con mirar el dashboard.
+
+---
+
+## 2026-09-07 (9) — Dashboard publicable: proxy server-side y puerta de entrada
+
+> [!summary] Qué se hizo
+> El frontend se deployó en Vercel y quedó al descubierto que **no podía funcionar
+> así**: la API vive en `127.0.0.1:8123` del VPS y la `X-API-Key` viajaba como
+> `NEXT_PUBLIC_API_KEY`, o sea incrustada en el bundle público. Se resolvieron las
+> dos cosas — un proxy en el servidor de Next que guarda la clave, y un login con
+> contraseña única delante de todo — y se dejaron listas las piezas del túnel de
+> Cloudflare que le da HTTPS a la API sin abrir ningún puerto.
+
+### El circuito nuevo
+
+```mermaid
+flowchart LR
+    NAV[Navegador] -->|1. contraseña| LOGIN[/api/login<br/>cookie httpOnly firmada/]
+    NAV -->|2. fetch sin credenciales| PX[proxy.ts<br/>¿hay sesión válida?]
+    PX -- no --> RED[/redirect a /login<br/>o 401 si es /api//]
+    PX -- sí --> PROXY[/api/backend/...<br/>agrega X-API-Key/]
+    PROXY -->|HTTPS| CF{{Cloudflare Tunnel}}
+    CF -.-> API[uvicorn 127.0.0.1:8123]
+```
+
+### Qué cambió y por qué
+
+| Antes | Ahora | Por qué |
+|---|---|---|
+| `NEXT_PUBLIC_API_KEY` en el bundle | `BACKEND_API_KEY` solo en el servidor | Next incrusta las `NEXT_PUBLIC_` en el JS público: publicar el front era publicar la clave |
+| El browser llamaba a la API directo | Llama a `/api/backend/...` de su propio origen | Además de esconder la clave, elimina el CORS: el request al backend lo hace el servidor |
+| Cualquiera con la URL operaba | Contraseña única + cookie firmada con HMAC | La URL de Vercel es pública, y detrás están `/iol/saldo` y el borrado de operaciones |
+| `middleware.ts` | `proxy.ts` | Next 16 deprecó la convención y avisa en cada build |
+
+> [!note] Falla cerrada, igual que la API
+> Un build de producción sin `DASHBOARD_PASSWORD` o sin `SESSION_SECRET` responde
+> **503 a todo**. Un deploy al que se le olvidó la variable tiene que romperse de
+> forma visible, no quedar abierto en silencio. En `next dev` sin esas variables
+> se entra derecho, porque contra loopback no aporta nada.
+
+> [!note] `secure` de la cookie se decide por host, no por `NODE_ENV`
+> Primera versión: `secure: NODE_ENV === "production"`. Un `next start` local
+> corre en producción sobre **http**, así que el navegador nunca devolvía la
+> cookie y el login quedaba en loop. Se cambió por "secure salvo en localhost".
+> Apareció justamente al probar el build de producción, no el `dev`.
+
+**Archivos tocados:**
+
+| Archivo | Qué |
+|---|---|
+| `frontend/proxy.ts` | Nuevo. Puerta de entrada: sesión, redirect a `/login`, 401 para `/api/*`, 503 si falta config |
+| `frontend/lib/sesion.ts` | Nuevo. Token HMAC-SHA256 con Web Crypto (el runtime Edge no tiene `node:crypto`) y comparación de tiempo constante |
+| `frontend/app/api/backend/[...path]/route.ts` | Nuevo. Proxy hacia la API; agrega `X-API-Key`, 502 con mensaje si el túnel está caído |
+| `frontend/app/api/login/route.ts` | Nuevo. POST entra, DELETE sale |
+| `frontend/app/login/page.tsx` | Nueva. Formulario de una sola contraseña |
+| `frontend/lib/api.ts` | Apunta a `/api/backend`; se eliminó `API_KEY` del cliente |
+| `frontend/.env.local.example` | Reescrito: 4 variables, ninguna `NEXT_PUBLIC_` |
+| `deploy/cloudflared.service`, `deploy/cloudflared-config.yml.example` | Nuevos |
+| `README.md` | Sección "Publicar la API con HTTPS (Cloudflare Tunnel)", tabla de variables del frontend, tabla túnel SSH vs Cloudflare |
+
+### Cómo se probó
+
+`npm run build` — compila limpio:
+
+```
+✓ Compiled successfully in 656ms
+  Finished TypeScript in 1486ms
+Route (app)
+┌ ○ /
+├ ƒ /api/backend/[...path]
+├ ƒ /api/login
+├ ○ /config
+├ ○ /login
+├ ○ /senales
+└ ○ /simulador
+ƒ Proxy (Middleware)
+```
+
+Circuito completo contra el build de producción (`PORT=3001 npm start`):
+
+```
+1) / sin sesion (espera 307 a /login):  307
+2) proxy sin sesion (espera 401):       401
+3) login password mal (espera 401):     401
+4) login OK (espera 200):               200
+5) Set-Cookie:  sesion_dashboard=1789413256086.4531db7b...; Path=/; Max-Age=604800; HttpOnly; SameSite=lax
+6) / CON sesion (espera 200):           200
+7) proxy CON sesion (tunel caido, espera 502): 502 {"detail":"No se pudo contactar al backend..."}
+8) cookie con firma falsa -> 401 (espera 401)
+```
+
+Verificación previa del VPS por SSH, antes de que se cortara el acceso:
+
+```
+health: {"status":"ok","auth":{"activa":true,"motivo":""}}
+sin clave -> 401
+con clave -> 200
+```
+
+### Pendiente / notas
+
+> [!warning] El salto proxy → backend NO se pudo probar de punta a punta
+> El test 7 de arriba da 502, no 200: llega hasta el `fetch` y falla ahí porque el
+> túnel estaba caído. Lo que quedó verificado es la puerta de entrada y el manejo
+> de error del proxy; **falta confirmar un 200 real con datos del dashboard
+> pasando por `/api/backend`**. Es lo primero que hay que mirar al levantar el
+> túnel de nuevo.
+
+> [!warning] El VPS cortó el SSH a mitad de la sesión
+> Después de varias conexiones seguidas, `ssh` empezó a devolver
+> `kex_exchange_identification: Connection reset by peer` y el túnel ya levantado
+> dejó de reenviar. La causa más probable es **fail2ban baneando la IP** por la
+> cantidad de conexiones. No se investigó: hacerlo requería más conexiones. Si al
+> reintentar sigue igual, revisar `sudo fail2ban-client status sshd` desde la
+> consola web del proveedor.
+
+> [!warning] La API key estuvo en un bundle público — hay que rotarla
+> No se rotó todavía porque implica tocar el `.env` del VPS y coordinar con las
+> variables de Vercel. Pasos en el README, sección "Publicar la API con HTTPS".
+
+> [!note] El túnel de Cloudflare quedó escrito, no instalado
+> `deploy/cloudflared.service` y la plantilla de config están listos, pero no se
+> corrieron en el VPS: hace falta un dominio en Cloudflare (o Tailscale Funnel
+> como alternativa sin dominio, documentada en el README).
+
+> [!note] La clave SSH se movió a `~/.ssh/tradingbot.key`
+> Estaba en la raíz del repo con permisos `-rw-r--r--`. Se copió a `~/.ssh` con
+> ACL restringida a un solo usuario, que es lo que OpenSSH de Windows exige. La
+> copia del repo (ignorada por git) todavía está ahí y conviene borrarla.
+
+> [!note] La plantilla del frontend estaba ignorada por git
+> `.gitignore` negaba `!**/.env.example`, que no cubre `.env.local.example`: la
+> plantilla nueva quedaba fuera del repo aunque el README la mencionara. Se
+> cambió por `!**/.env*.example`. Verificado que `frontend/.env.local` y
+> `backend/.env` **siguen ignorados**.
+
+> [!todo] Próximo paso
+> Sigue siendo la Tarea 10.4 👤. Antes: recuperar el SSH, confirmar el 200 real
+> por el proxy, y decidir si se levanta el túnel de Cloudflare o se sigue con SSH.

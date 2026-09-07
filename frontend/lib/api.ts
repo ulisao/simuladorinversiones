@@ -14,19 +14,19 @@ import type {
   EstadoSheets,
 } from "./types";
 
-const API_URL = process.env.NEXT_PUBLIC_API_URL || "http://localhost:8123";
-
 /**
- * Clave de la API, que viaja en el header `X-API-Key` en cada request.
+ * Todo pasa por el proxy de Next (`app/api/backend/[...path]/route.ts`), nunca
+ * directo contra la API.
  *
- * OJO: al ser `NEXT_PUBLIC_`, Next la incrusta en el bundle del navegador —
- * cualquiera que abra devtools la ve. Es aceptable mientras el frontend corra
- * en la máquina de uno contra un backend en loopback (que es el caso hoy). Si
- * alguna vez este frontend se publica en Vercel, esta clave deja de servir como
- * secreto: ahí hace falta un backend-for-frontend que la guarde del lado del
- * servidor, o login de usuario.
+ * El motivo es la `X-API-Key`: antes viajaba como `NEXT_PUBLIC_API_KEY` y Next
+ * incrusta esas variables en el bundle del navegador, así que publicar el
+ * frontend era publicar la clave. Ahora la clave vive en `BACKEND_API_KEY`, del
+ * lado del servidor, y el browser solo habla con su propio origen.
+ *
+ * A dónde apunta el proxy se configura con `BACKEND_URL` (ver
+ * `.env.local.example`).
  */
-const API_KEY = process.env.NEXT_PUBLIC_API_KEY || "";
+const API_URL = "/api/backend";
 
 /**
  * FastAPI devuelve los errores como {"detail": "mensaje en español"}.
@@ -48,7 +48,7 @@ async function mensajeDeError(res: Response, path: string): Promise<string> {
     // El backend no devolvió JSON: se cae al mensaje genérico de abajo.
   }
   if (res.status === 401) {
-    return "El backend rechazó la clave. Revisá NEXT_PUBLIC_API_KEY en frontend/.env.local (tiene que coincidir con API_KEY del backend).";
+    return "El backend rechazó la clave. Revisá BACKEND_API_KEY del frontend (tiene que coincidir con API_KEY del backend).";
   }
   if (res.status === 503 && body.includes("API_KEY")) {
     return "El backend no tiene API_KEY configurada. Cargala en backend/.env (ver .env.example).";
@@ -61,9 +61,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     ...init,
     headers: {
       "Content-Type": "application/json",
-      // Solo se manda si está configurada: si el backend corre con
-      // API_AUTH_DESHABILITADA=true, un header vacío daría 401 igual.
-      ...(API_KEY ? { "X-API-Key": API_KEY } : {}),
+      // La X-API-Key la pone el proxy del lado del servidor, no acá.
       ...(init?.headers || {}),
     },
     cache: "no-store",

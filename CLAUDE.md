@@ -40,12 +40,16 @@ backend/                 API FastAPI + SQLite (SQLAlchemy)
   requirements.txt
   seed.py                Carga las 5 operaciones de ejemplo del Excel
 frontend/                Next.js (App Router) + Tailwind
-  app/                   page.tsx (Dashboard), simulador/, senales/, config/
+  proxy.ts               Puerta de entrada: exige sesión antes de cualquier ruta
+  app/                   page.tsx (Dashboard), simulador/, senales/, config/, login/
+    api/backend/         Proxy hacia la API — agrega la X-API-Key server-side
+    api/login/           Entrada y salida (cookie httpOnly firmada)
   components/            Nav, MetricCard, NewTradeForm, CloseTradeRow
-  lib/                   api.ts (cliente HTTP), types.ts, format.ts
+  lib/                   api.ts (cliente HTTP), sesion.ts, types.ts, format.ts
 deploy/                  Units systemd para el VPS (Tarea 10.3)
   tradingbot-api.service       uvicorn en 127.0.0.1:8123
   tradingbot-scanner.service   scanner_job.py, escaneo 24/7
+  cloudflared.service          Túnel con TLS para publicar la API (sin abrir puertos)
 docs/                    Manuales originales (.docx) + parametros-riesgo.md
   specs-txt/             Texto plano extraído de los .docx, para consulta rápida
 ```

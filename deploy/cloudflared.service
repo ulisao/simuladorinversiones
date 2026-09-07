@@ -1,0 +1,39 @@
+# Túnel de Cloudflare — publica la API (127.0.0.1:8123) con HTTPS, sin abrir
+# ningún puerto entrante en el VPS.
+#
+# Instalación y creación del túnel en README.md, sección
+# "Publicar la API con HTTPS (Cloudflare Tunnel)".
+#
+# La conexión la ABRE el VPS hacia Cloudflare. El firewall del servidor sigue
+# sin aceptar nada de afuera y la API sigue bindeada a 127.0.0.1: esto NO
+# reemplaza el bind, lo aprovecha.
+
+[Unit]
+Description=Cloudflare Tunnel - expone la API del simulador con TLS
+Documentation=https://github.com/ulisao/simuladorinversiones
+Wants=network-online.target
+# La API tiene que estar arriba antes que el túnel, si no el primer request
+# después de un reboot devuelve 502.
+After=network-online.target tradingbot-api.service
+
+[Service]
+Type=notify
+User=tradingbot
+Group=tradingbot
+
+# Las credenciales del túnel (cert.pem y <UUID>.json) las escribe
+# `cloudflared tunnel login` / `create` en este directorio. chmod 700.
+Environment=TUNNEL_ORIGIN_CERT=/etc/cloudflared/cert.pem
+ExecStart=/usr/local/bin/cloudflared --no-autoupdate --config /etc/cloudflared/config.yml tunnel run
+
+Restart=always
+RestartSec=10
+
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=full
+ProtectKernelTunables=true
+ProtectControlGroups=true
+
+[Install]
+WantedBy=multi-user.target

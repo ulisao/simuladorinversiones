@@ -131,8 +131,25 @@ npm install
 npm run dev
 ```
 
-Abrí `http://localhost:3000`. Si el backend corre en otro puerto/host, editá
-`frontend/.env.local` (`NEXT_PUBLIC_API_URL`).
+Abrí `http://localhost:3000`. La configuración va en `frontend/.env.local`
+(plantilla en `frontend/.env.local.example`):
+
+| Variable | Para qué |
+|---|---|
+| `BACKEND_URL` | A dónde le pega el proxy. `http://127.0.0.1:8123` en local o por túnel SSH; el hostname del túnel de Cloudflare si el front está en Vercel |
+| `BACKEND_API_KEY` | La misma que `API_KEY` de `backend/.env` |
+| `DASHBOARD_PASSWORD` | Contraseña única para entrar al dashboard |
+| `SESSION_SECRET` | Con qué se firma la cookie de sesión |
+
+> [!warning] Ninguna lleva el prefijo `NEXT_PUBLIC_`, y no hay que agregárselo
+> Next incrusta las variables `NEXT_PUBLIC_` en el bundle que se descarga el
+> navegador. La `API_KEY` viajaba así hasta que el frontend se publicó: eso es
+> publicar la clave. Hoy el browser nunca la ve — habla solo con el proxy de Next
+> (`app/api/backend/[...path]/route.ts`), que la agrega del lado del servidor.
+
+En `next dev` sin `DASHBOARD_PASSWORD` se entra derecho, sin login. En un build de
+producción sin esa variable **el deploy responde 503 a todo**: falla cerrada, igual
+que la API sin `API_KEY`.
 
 ### Variables de entorno
 
@@ -443,12 +460,14 @@ flowchart TD
 > pero el bind sigue en loopback: son dos capas distintas y conviene tener las dos.
 > `/iol/saldo` devuelve el saldo y la tenencia reales de la cuenta comitente, y
 > `/trades` permite crear y borrar operaciones.
-> Para consumirla desde afuera (por ejemplo un frontend en Vercel) **no alcanza
-> con cambiar el bind ni con la API key**: falta un reverse proxy con TLS, porque
-> sin HTTPS la clave viaja en texto plano en cada request. Mientras eso no exista,
-> lo seguro es un túnel SSH:
-> `ssh -L 8123:127.0.0.1:8123 ubuntu@161.153.207.188` y apuntar
-> `NEXT_PUBLIC_API_URL` a `http://127.0.0.1:8123` en la máquina local.
+> Para consumirla desde afuera **no alcanza con cambiar el bind ni con la API
+> key**: falta TLS, porque sin HTTPS la clave viaja en texto plano en cada
+> request. Hay dos formas de llegarle sin exponer el puerto:
+>
+> | Forma | Cuándo | Cómo |
+> |---|---|---|
+> | Túnel SSH | Mirar el dashboard desde tu propia máquina | `ssh -i ~/.ssh/tradingbot.key -L 8123:127.0.0.1:8123 ubuntu@161.153.207.188` y `BACKEND_URL=http://127.0.0.1:8123` |
+> | Cloudflare Tunnel | Dashboard publicado en Vercel, accesible desde el celular | Ver ["Publicar la API con HTTPS"](#publicar-la-api-con-https-cloudflare-tunnel) |
 
 #### Instalar y habilitar
 
@@ -517,6 +536,98 @@ sudo reboot
 > `systemctl show tradingbot-scanner` imprime todo lo que esté en `Environment=`,
 > y eso queda en el journal. Por eso el `.env` entra por `EnvironmentFile=` con
 > permisos `600`, y en `Environment=` solo hay `TZ` y `PYTHONUNBUFFERED`.
+
+### Publicar la API con HTTPS (Cloudflare Tunnel)
+
+Con el túnel SSH el dashboard solo se ve desde tu máquina y con la terminal
+abierta. Para que el frontend publicado en Vercel llegue a la API hace falta
+HTTPS, y `cloudflared` lo resuelve sin abrir ningún puerto entrante: la conexión
+la **abre el VPS hacia Cloudflare**.
+
+```mermaid
+flowchart LR
+    CEL[Navegador] -->|HTTPS| VER[Vercel<br/>proxy.ts + /api/backend]
+    VER -->|HTTPS + X-API-Key| CF{{Cloudflare}}
+    CF -.->|túnel saliente<br/>lo abre el VPS| CD[cloudflared]
+    CD --> API[uvicorn<br/>127.0.0.1:8123]
+    subgraph VPS
+        CD
+        API
+        SC[scanner_job<br/>24/7]
+    end
+```
+
+> [!note] El bind sigue en loopback
+> `cloudflared` corre **dentro** del VPS y le pega a `127.0.0.1:8123` como
+> cualquier proceso local. No hay que tocar `--host` en la unit de la API ni
+> abrir el puerto en el firewall.
+
+> [!warning] Necesita un dominio en Cloudflare
+> Un túnel con nombre requiere una zona DNS en Cloudflare. Si no tenés dominio, la
+> alternativa sin comprar nada es **Tailscale Funnel**, que da un hostname
+> `*.ts.net` con TLS: `sudo tailscale funnel 8123`. El resto de la configuración
+> del frontend es idéntica, solo cambia `BACKEND_URL`.
+
+#### Instalar
+
+```bash
+# 1. Binario oficial
+curl -L https://github.com/cloudflare/cloudflared/releases/latest/download/cloudflared-linux-amd64 \
+  -o /tmp/cloudflared && sudo install -m 755 /tmp/cloudflared /usr/local/bin/cloudflared
+
+# 2. Autorizar la cuenta (abre una URL, se aprueba desde el navegador)
+sudo mkdir -p /etc/cloudflared && sudo chown tradingbot:tradingbot /etc/cloudflared
+sudo -u tradingbot TUNNEL_ORIGIN_CERT=/etc/cloudflared/cert.pem cloudflared tunnel login
+
+# 3. Crear el túnel. Imprime el UUID y escribe /etc/cloudflared/<UUID>.json
+sudo -u tradingbot TUNNEL_ORIGIN_CERT=/etc/cloudflared/cert.pem \
+  cloudflared tunnel create tradingbot
+
+# 4. Config: copiar la plantilla y reemplazar UUID y hostname
+sudo cp deploy/cloudflared-config.yml.example /etc/cloudflared/config.yml
+sudo nano /etc/cloudflared/config.yml
+sudo chown tradingbot:tradingbot /etc/cloudflared/config.yml
+sudo chmod 600 /etc/cloudflared/config.yml
+sudo chmod 700 /etc/cloudflared
+
+# 5. Ruta DNS (crea el CNAME en Cloudflare solo)
+sudo -u tradingbot TUNNEL_ORIGIN_CERT=/etc/cloudflared/cert.pem \
+  cloudflared tunnel route dns tradingbot api.tu-dominio.com
+
+# 6. Servicio
+sudo cp deploy/cloudflared.service /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now cloudflared
+systemctl status cloudflared --no-pager
+```
+
+Verificación, desde cualquier máquina:
+
+```bash
+curl -s https://api.tu-dominio.com/health                       # {"status":"ok",...}
+curl -s -o /dev/null -w "%{http_code}\n" https://api.tu-dominio.com/dashboard   # 401
+```
+
+#### Variables en Vercel
+
+En **Settings → Environment Variables** del proyecto, las cuatro (sin prefijo
+`NEXT_PUBLIC_`, y marcadas como secretas):
+
+| Variable | Valor |
+|---|---|
+| `BACKEND_URL` | `https://api.tu-dominio.com` |
+| `BACKEND_API_KEY` | La `API_KEY` de `backend/.env` del VPS |
+| `DASHBOARD_PASSWORD` | La contraseña para entrar al dashboard |
+| `SESSION_SECRET` | `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
+
+Después de cargarlas hay que **redeployar**: Vercel las inyecta en el build, no
+en caliente.
+
+> [!warning] La API key que estuvo en el bundle hay que rotarla
+> Mientras el frontend usó `NEXT_PUBLIC_API_KEY`, la clave quedó dentro del
+> JavaScript público de Vercel. Rotarla es generar una nueva, ponerla en
+> `backend/.env` del VPS, `sudo systemctl restart tradingbot-api`, y actualizar
+> `BACKEND_API_KEY` en Vercel y en `frontend/.env.local`.
 
 ### Tests
 
