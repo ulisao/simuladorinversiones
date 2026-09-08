@@ -467,7 +467,7 @@ flowchart TD
 > | Forma | Cuándo | Cómo |
 > |---|---|---|
 > | Túnel SSH | Mirar el dashboard desde tu propia máquina | `ssh -i ~/.ssh/tradingbot.key -L 8123:127.0.0.1:8123 ubuntu@161.153.207.188` y `BACKEND_URL=http://127.0.0.1:8123` |
-> | Cloudflare Tunnel | Dashboard publicado en Vercel, accesible desde el celular | Ver ["Publicar la API con HTTPS"](#publicar-la-api-con-https-cloudflare-tunnel) |
+> | Tailscale Funnel | Dashboard publicado en Vercel, accesible desde el celular | Ver ["Publicar la API con HTTPS"](#publicar-la-api-con-https) |
 
 #### Instalar y habilitar
 
@@ -537,38 +537,71 @@ sudo reboot
 > y eso queda en el journal. Por eso el `.env` entra por `EnvironmentFile=` con
 > permisos `600`, y en `Environment=` solo hay `TZ` y `PYTHONUNBUFFERED`.
 
-### Publicar la API con HTTPS (Cloudflare Tunnel)
+### Publicar la API con HTTPS
 
 Con el túnel SSH el dashboard solo se ve desde tu máquina y con la terminal
 abierta. Para que el frontend publicado en Vercel llegue a la API hace falta
-HTTPS, y `cloudflared` lo resuelve sin abrir ningún puerto entrante: la conexión
-la **abre el VPS hacia Cloudflare**.
+HTTPS, sin abrir ningún puerto entrante: la conexión la **abre el VPS hacia
+afuera**.
 
 ```mermaid
 flowchart LR
     CEL[Navegador] -->|HTTPS| VER[Vercel<br/>proxy.ts + /api/backend]
-    VER -->|HTTPS + X-API-Key| CF{{Cloudflare}}
-    CF -.->|túnel saliente<br/>lo abre el VPS| CD[cloudflared]
-    CD --> API[uvicorn<br/>127.0.0.1:8123]
+    VER -->|HTTPS + X-API-Key| TS{{Tailscale Funnel}}
+    TS -.->|túnel saliente<br/>lo abre el VPS| TD[tailscaled]
+    TD --> API[uvicorn<br/>127.0.0.1:8123]
     subgraph VPS
-        CD
+        TD
         API
         SC[scanner_job<br/>24/7]
     end
 ```
 
 > [!note] El bind sigue en loopback
-> `cloudflared` corre **dentro** del VPS y le pega a `127.0.0.1:8123` como
+> El agente del túnel corre **dentro** del VPS y le pega a `127.0.0.1:8123` como
 > cualquier proceso local. No hay que tocar `--host` en la unit de la API ni
 > abrir el puerto en el firewall.
 
-> [!warning] Necesita un dominio en Cloudflare
-> Un túnel con nombre requiere una zona DNS en Cloudflare. Si no tenés dominio, la
-> alternativa sin comprar nada es **Tailscale Funnel**, que da un hostname
-> `*.ts.net` con TLS: `sudo tailscale funnel 8123`. El resto de la configuración
-> del frontend es idéntica, solo cambia `BACKEND_URL`.
+| Opción | Requiere | Estado |
+|---|---|---|
+| **Tailscale Funnel** | Nada. Da un hostname `*.ts.net` con TLS gratis | ✅ **Es lo que está instalado** |
+| Cloudflare Tunnel | Un dominio propio con la zona DNS en Cloudflare | Escrito en `deploy/`, sin instalar |
 
-#### Instalar
+#### Tailscale Funnel (lo que está andando)
+
+```bash
+# 1. Instalar en el VPS
+curl -fsSL https://tailscale.com/install.sh | sudo sh
+
+# 2. Registrar la máquina. Imprime una URL: hay que abrirla y loguearse.
+sudo tailscale up --hostname=tradingbot --accept-dns=false
+
+# 3. Publicar SOLO el puerto de la API.
+#    La primera vez avisa que Funnel está apagado en la cuenta y da un link
+#    para habilitarlo; después de hacerlo, correr el comando de nuevo.
+sudo tailscale funnel --bg 8123
+
+# 4. Ver qué quedó publicado
+sudo tailscale funnel status
+```
+
+Queda en `https://<hostname>.<tailnet>.ts.net`. Verificación desde cualquier
+máquina:
+
+```bash
+curl -s https://tradingbot.tailc22530.ts.net/health                              # {"status":"ok",...}
+curl -s -o /dev/null -w "%{http_code}\n" https://tradingbot.tailc22530.ts.net/dashboard  # 401
+```
+
+> [!note] Sobrevive al reboot
+> `tailscaled` está `enabled` y la config de Funnel se guarda en su estado: no
+> hay que volver a correr nada después de reiniciar el VPS.
+
+> [!warning] Solo se publica el 8123
+> Funnel expone **únicamente** lo que se le indica. El SSH y el resto del VPS no
+> quedan accesibles por esa vía.
+
+#### Cloudflare Tunnel (alternativa, si tenés dominio)
 
 ```bash
 # 1. Binario oficial
@@ -615,7 +648,7 @@ En **Settings → Environment Variables** del proyecto, las cuatro (sin prefijo
 
 | Variable | Valor |
 |---|---|
-| `BACKEND_URL` | `https://api.tu-dominio.com` |
+| `BACKEND_URL` | El hostname del túnel, p. ej. `https://tradingbot.tailc22530.ts.net` |
 | `BACKEND_API_KEY` | La `API_KEY` de `backend/.env` del VPS |
 | `DASHBOARD_PASSWORD` | La contraseña para entrar al dashboard |
 | `SESSION_SECRET` | `python -c "import secrets; print(secrets.token_urlsafe(32))"` |
@@ -623,11 +656,12 @@ En **Settings → Environment Variables** del proyecto, las cuatro (sin prefijo
 Después de cargarlas hay que **redeployar**: Vercel las inyecta en el build, no
 en caliente.
 
-> [!warning] La API key que estuvo en el bundle hay que rotarla
-> Mientras el frontend usó `NEXT_PUBLIC_API_KEY`, la clave quedó dentro del
-> JavaScript público de Vercel. Rotarla es generar una nueva, ponerla en
+> [!warning] Si la API key llegó a estar en el bundle, rotarla
+> Mientras el frontend usó `NEXT_PUBLIC_API_KEY`, la clave quedaba dentro del
+> JavaScript público de Vercel. Rotar es generar una nueva, ponerla en
 > `backend/.env` del VPS, `sudo systemctl restart tradingbot-api`, y actualizar
-> `BACKEND_API_KEY` en Vercel y en `frontend/.env.local`.
+> `BACKEND_API_KEY` en Vercel y en `frontend/.env.local`. Se hizo una rotación el
+> 2026-09-07, al publicar la API.
 
 ### Tests
 

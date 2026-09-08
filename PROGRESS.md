@@ -3215,3 +3215,119 @@ con clave -> 200
 > [!todo] Próximo paso
 > Sigue siendo la Tarea 10.4 👤. Antes: recuperar el SSH, confirmar el 200 real
 > por el proxy, y decidir si se levanta el túnel de Cloudflare o se sigue con SSH.
+
+---
+
+## 2026-09-07 (10) — La API publicada con HTTPS (Tailscale Funnel)
+
+> [!summary] Qué se hizo
+> Se cerró lo que había quedado abierto en la entrada anterior: la API dejó de ser
+> alcanzable solo por túnel SSH y quedó publicada en
+> `https://tradingbot.tailc22530.ts.net` con TLS, **sin abrir un solo puerto
+> entrante en el VPS**. Con eso el dashboard de Vercel ya puede funcionar sin que
+> haya una terminal abierta. De paso se rotó la API key.
+
+### Por qué Tailscale y no Cloudflare
+
+Cloudflare Tunnel necesita un dominio propio con la zona DNS en Cloudflare, y no
+hay ninguno. Tailscale Funnel da un hostname `*.ts.net` con certificado válido
+sin comprar nada.
+
+| Opción | Requiere dominio | Costo | Elegido |
+|---|---|---|---|
+| Tailscale Funnel | No | Gratis | ✅ |
+| Cloudflare Tunnel | Sí | Gratis + el dominio | Queda escrito en `deploy/`, sin instalar |
+| Caddy/nginx con TLS | Sí, y abrir el 443 | Gratis + el dominio | Descartado: implica exponer un puerto |
+
+### Cómo quedó el camino completo
+
+```mermaid
+sequenceDiagram
+    participant N as Navegador
+    participant V as Vercel (proxy.ts)
+    participant T as Tailscale Funnel
+    participant A as uvicorn 127.0.0.1:8123
+    N->>V: contraseña
+    V-->>N: cookie httpOnly firmada
+    N->>V: GET /api/backend/dashboard
+    V->>T: HTTPS + X-API-Key
+    T->>A: HTTP local
+    A-->>N: JSON del dashboard
+```
+
+**Archivos tocados:** `frontend/.env.local` (URL del túnel + clave nueva),
+`README.md` (sección "Publicar la API con HTTPS" reescrita con Tailscale como
+camino real y Cloudflare como alternativa).
+En el VPS: `tailscale` instalado, `backend/.env` con la `API_KEY` rotada
+(backup en `.env.bak.<fecha>`).
+
+### Cómo se probó
+
+Desde afuera del VPS, sin túnel SSH:
+
+```
+health -> 200 {"status":"ok","auth":{"activa":true,"motivo":""}}
+dashboard SIN clave -> 401
+trades CON clave -> 200
+```
+
+Rotación de la clave, verificada en el mismo comando:
+
+```
+active
+--- vieja (espera 401) ---
+401
+--- nueva (espera 200) ---
+200
+```
+
+Circuito completo navegador → proxy de Next → API real (`PORT=3001 npm start`):
+
+```
+1) login -> 200
+2) proxy -> API real -> 200
+   cuerpo: {"capital_total_invertido":0.0,"total_comisiones_pagadas":0.0,...}
+3) /iol/saldo -> 200
+   cuerpo: {"disponible":539.36,"moneda":"peso_Argentino","titulos_valorizados":3071252.63,...}
+```
+
+> [!note] Esto cierra el pendiente de la entrada anterior
+> Ahí el test 7 daba 502 porque el túnel estaba caído. Ahora da 200 con datos
+> reales, incluido el saldo de la cuenta comitente pasando por todo el camino.
+
+Persistencia tras reboot:
+
+```
+== tailscaled arranca al bootear? ==
+enabled
+== funnel ==
+https://tradingbot.tailc22530.ts.net (Funnel on)
+|-- / proxy http://127.0.0.1:8123
+== servicios del bot ==
+enabled
+enabled
+```
+
+### Pendiente / notas
+
+> [!warning] El corte de SSH quedó sin explicación
+> Durante la sesión el VPS empezó a rechazar conexiones
+> (`kex_exchange_identification: Connection reset`) y se recuperó solo al rato,
+> **sin reiniciar** (uptime 2h19m al volver). Se sospechaba `fail2ban`, pero
+> `fail2ban` **no está instalado**. Queda como incógnita: si se repite, mirar el
+> lado del proveedor (Oracle Cloud) antes que el del sistema.
+
+> [!warning] La contraseña del dashboard es una generada al azar
+> `DASHBOARD_PASSWORD=Ao_vhMtftzBK` salió de `secrets.token_urlsafe`. Sirve, pero
+> el dueño del dashboard es otra persona (la cuenta de Tailscale quedó a nombre de
+> `matibiga@`): conviene que elija una que pueda recordar antes de cargarla en
+> Vercel.
+
+> [!warning] La API ahora es alcanzable desde internet
+> Es lo que se buscaba, pero cambia el modelo de amenaza: antes había que estar en
+> la red del VPS. Las capas que quedan son la `X-API-Key` (verificado: 401 sin
+> ella) y `MODO_FANTASMA=true`, que impide que salga una orden real a IOL. El
+> bind sigue en `127.0.0.1` y solo el 8123 está publicado.
+
+> [!todo] Próximo paso
+> Cargar las 4 variables en Vercel y redeployar. Después, Tarea 10.4 👤.
